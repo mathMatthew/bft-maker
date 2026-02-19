@@ -21,6 +21,7 @@ export function validate(manifest: Manifest): ValidationError[] {
   checkRelationshipEntities(manifest, entityMap, errors);
   checkClusterMetrics(manifest, metricOwner, errors);
   checkTraversalRules(manifest, metricOwner, relationshipNames, errors);
+  checkTableMetrics(manifest, metricOwner, errors);
   checkNonAdditiveStrategies(manifest, metricOwner, errors);
   checkGrainConnectivity(manifest, entityMap, errors);
 
@@ -223,6 +224,25 @@ function checkTraversalRules(
           rule: "traversal-rule-required",
           message: `Metric "${metricName}" in cluster "${cluster.name}" has no traversal rule (cluster spans multiple entities: ${[...clusterEntities].join(", ")})`,
           path: `metric_clusters.${cluster.name}.traversals`,
+        });
+      }
+    }
+  }
+}
+
+// Rule: All metric names referenced in table resolved metrics must exist on some entity
+function checkTableMetrics(
+  manifest: Manifest,
+  metricOwner: Map<string, Entity>,
+  errors: ValidationError[]
+): void {
+  for (const table of manifest.bft_tables) {
+    for (const rm of table.metrics) {
+      if (!metricOwner.has(rm.metric)) {
+        errors.push({
+          rule: "table-metric-exists",
+          message: `Table "${table.name}" references nonexistent metric "${rm.metric}"`,
+          path: `bft_tables.${table.name}.metrics.${rm.metric}`,
         });
       }
     }

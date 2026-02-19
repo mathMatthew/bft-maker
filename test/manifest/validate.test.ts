@@ -232,6 +232,19 @@ describe("validate", () => {
     });
   });
 
+  describe("table metric references", () => {
+    it("catches nonexistent metric in table", () => {
+      const m = validManifest();
+      m.bft_tables[0].metrics.push({
+        metric: "nonexistent_metric",
+        strategy: "direct",
+        sum_safe: true,
+      });
+      const errors = validate(m);
+      assert.ok(errors.some((e) => e.rule === "table-metric-exists" && e.message.includes("nonexistent_metric")));
+    });
+  });
+
   describe("traversal rules", () => {
     it("catches missing traversal rule for multi-entity cluster", () => {
       const m = validManifest();
