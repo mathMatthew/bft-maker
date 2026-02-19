@@ -12,7 +12,7 @@ Three pieces, each depends only on the manifest types:
 There is no wizard UI. The "wizard" is an LLM conversation using docs/spec.md as context to guide a user through building a manifest.
 
 ## Stack
-- TypeScript, zero runtime dependencies
+- TypeScript, minimal runtime dependencies (js-yaml for manifest parsing)
 - DuckDB for local SQL execution
 - Spark SQL as scale-out dialect
 - Node built-in test runner

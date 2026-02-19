@@ -13,7 +13,12 @@
     "test": "tsc && node --test dist/test/**/*.test.js"
   },
   "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^25.3.0",
     "typescript": "^5.7.0"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "js-yaml": "^4.1.1"
+  }
 }
