@@ -5,6 +5,10 @@ import type { Manifest } from "./types.js";
 /**
  * Parse a YAML string into a Manifest. The result is structurally unvalidated —
  * call validate() on the returned manifest to check semantic correctness.
+ *
+ * TODO: Add runtime structural validation (e.g. via zod) to catch type mismatches
+ * (wrong field types, missing required fields, extra keys) before they cause
+ * downstream runtime errors. Currently only semantic validation exists via validate().
  */
 export function parseManifest(yamlString: string): Manifest {
   const raw = yaml.load(yamlString) as Manifest;

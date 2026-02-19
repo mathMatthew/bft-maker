@@ -2,7 +2,7 @@ import type { Entity, Relationship, BftTable } from "./types.js";
 
 export interface RowEstimate {
   rows: number;
-  reserve_rows: number;
+  reserve_row_count: number;
   total: number;
   breakdown: string[];
 }
@@ -61,7 +61,7 @@ export function estimateRows(
 
   return {
     rows: totalRows,
-    reserve_rows: 0,
+    reserve_row_count: 0,
     total: totalRows,
     breakdown,
   };
@@ -77,33 +77,30 @@ export function estimateTableRows(
 ): RowEstimate {
   const base = estimateRows(entities, relationships, table.grain_entities);
 
-  // Count reserve rows: +1 per entity with reserve-strategy metrics
-  let reserveCount = 0;
-  const reserveEntities: string[] = [];
-  const entityMap = new Map(entities.map((e) => [e.name, e]));
-
-  for (const rm of table.metrics) {
-    if (rm.requires_reserve_rows || rm.strategy === "reserve" || rm.strategy === "elimination") {
-      // Find which entity owns this metric
-      for (const entity of entities) {
-        if (
-          entity.metrics.some((m) => m.name === rm.metric) &&
-          !reserveEntities.includes(entity.name)
-        ) {
-          reserveEntities.push(entity.name);
-          reserveCount++;
-        }
-      }
+  // Count reserve rows: +1 per entity with reserve/elimination-strategy metrics
+  const metricOwner = new Map<string, string>();
+  for (const entity of entities) {
+    for (const m of entity.metrics) {
+      metricOwner.set(m.name, entity.name);
     }
   }
 
+  const reserveEntities = new Set<string>();
+  for (const rm of table.metrics) {
+    if (rm.strategy === "reserve" || rm.strategy === "elimination") {
+      const owner = metricOwner.get(rm.metric);
+      if (owner) reserveEntities.add(owner);
+    }
+  }
+
+  const reserveCount = reserveEntities.size;
   if (reserveCount > 0) {
     base.breakdown.push(
-      `Reserve rows: +${reserveCount} (${reserveEntities.join(", ")})`
+      `Reserve rows: +${reserveCount} (${[...reserveEntities].join(", ")})`
     );
   }
 
-  base.reserve_rows = reserveCount;
+  base.reserve_row_count = reserveCount;
   base.total = base.rows + reserveCount;
   return base;
 }
@@ -118,7 +115,7 @@ export function fanOut(
   return relationship.estimated_links / bridgeEntity.estimated_rows;
 }
 
-function findConnectedComponents(
+export function findConnectedComponents(
   entityNames: string[],
   mmRels: Relationship[]
 ): string[][] {

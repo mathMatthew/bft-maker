@@ -218,6 +218,14 @@ describe("validate", () => {
       const errors = validate(m);
       assert.ok(errors.some((e) => e.rule === "relationship-entity-exists" && e.message.includes("Course")));
     });
+
+    it("catches relationship with wrong number of entities in between", () => {
+      const m = validManifest();
+      // Force a 3-element array (simulating bad YAML input)
+      (m.relationships[0] as any).between = ["Student", "Class", "Professor"];
+      const errors = validate(m);
+      assert.ok(errors.some((e) => e.rule === "relationship-between-pair" && e.message.includes("3")));
+    });
   });
 
   describe("cluster metric references", () => {

@@ -93,6 +93,31 @@ describe("estimateRows", () => {
     assert.equal(result.rows, 45000 + 800);
   });
 
+  it("many-to-one relationships do not create cross-product", () => {
+    // M-to-1 relationships are not used for row expansion — entities
+    // connected only via M-to-1 are treated as independent (sparse union)
+    const department: Entity = {
+      name: "Department",
+      role: "leaf",
+      detail: true,
+      estimated_rows: 50,
+      metrics: [],
+    };
+    const mtoRel: Relationship = {
+      name: "StudentDept",
+      between: ["Student", "Department"],
+      type: "many-to-one",
+      estimated_links: 45000,
+    };
+    const result = estimateRows(
+      [...entities, department],
+      [mtoRel],
+      ["Student", "Department"]
+    );
+    // M-to-1 doesn't create M-M expansion, so treated as sparse union
+    assert.equal(result.rows, 45000 + 50);
+  });
+
   it("provides breakdown describing the calculation", () => {
     const result = estimateRows(entities, relationships, [
       "Student",
@@ -132,7 +157,7 @@ describe("estimateTableRows", () => {
 
     const result = estimateTableRows(entities, relationships, table);
     assert.equal(result.rows, 180000);
-    assert.equal(result.reserve_rows, 1); // Professor has reserve-strategy metric
+    assert.equal(result.reserve_row_count, 1); // Professor has reserve-strategy metric
     assert.equal(result.total, 180001);
   });
 
@@ -155,7 +180,7 @@ describe("estimateTableRows", () => {
     };
 
     const result = estimateTableRows(entities, relationships, table);
-    assert.equal(result.reserve_rows, 1);
+    assert.equal(result.reserve_row_count, 1);
     assert.equal(result.total, 120001);
   });
 
@@ -184,7 +209,7 @@ describe("estimateTableRows", () => {
     };
 
     const result = estimateTableRows(entities, relationships, table);
-    assert.equal(result.reserve_rows, 0);
+    assert.equal(result.reserve_row_count, 0);
     assert.equal(result.total, 120000);
   });
 });

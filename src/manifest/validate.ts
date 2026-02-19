@@ -1,4 +1,5 @@
 import type { Manifest, Entity, MetricDef } from "./types.js";
+import { findConnectedComponents } from "./estimate.js";
 
 export interface ValidationError {
   rule: string;
@@ -101,6 +102,7 @@ function checkDuplicates(
       errors.push({
         rule: "no-duplicates",
         message: `Duplicate ${kind} name: "${name}"`,
+        path: `${kind}s.${name}`,
       });
     }
     seen.add(name);
@@ -142,6 +144,14 @@ function checkRelationshipEntities(
   errors: ValidationError[]
 ): void {
   for (const rel of manifest.relationships) {
+    if (!Array.isArray(rel.between) || rel.between.length !== 2) {
+      errors.push({
+        rule: "relationship-between-pair",
+        message: `Relationship "${rel.name}" must have exactly 2 entities in "between", got ${Array.isArray(rel.between) ? rel.between.length : typeof rel.between}`,
+        path: `relationships.${rel.name}.between`,
+      });
+      continue;
+    }
     for (const entityName of rel.between) {
       if (!entityMap.has(entityName)) {
         errors.push({
@@ -288,10 +298,9 @@ function checkGrainConnectivity(
     }
 
     // Check cluster references exist
+    const clusterNames = new Set(manifest.metric_clusters.map((c) => c.name));
     for (const clusterName of table.clusters_served) {
-      if (
-        !manifest.metric_clusters.some((c) => c.name === clusterName)
-      ) {
+      if (!clusterNames.has(clusterName)) {
         errors.push({
           rule: "table-cluster-exists",
           message: `Table "${table.name}" references nonexistent cluster "${clusterName}"`,
@@ -304,38 +313,10 @@ function checkGrainConnectivity(
     if (table.grain_entities.length < 2) continue;
 
     const grainSet = new Set(table.grain_entities);
-
-    // Build adjacency for grain entities via relationships
-    const adj = new Map<string, Set<string>>();
-    for (const name of table.grain_entities) {
-      adj.set(name, new Set());
-    }
-    for (const rel of manifest.relationships) {
-      const [a, b] = rel.between;
-      if (grainSet.has(a) && grainSet.has(b)) {
-        adj.get(a)!.add(b);
-        adj.get(b)!.add(a);
-      }
-    }
-
-    // BFS to find connected components
-    const visited = new Set<string>();
-    const components: string[][] = [];
-    for (const name of table.grain_entities) {
-      if (visited.has(name)) continue;
-      const component: string[] = [];
-      const queue = [name];
-      while (queue.length > 0) {
-        const current = queue.shift()!;
-        if (visited.has(current)) continue;
-        visited.add(current);
-        component.push(current);
-        for (const neighbor of adj.get(current) ?? []) {
-          if (!visited.has(neighbor)) queue.push(neighbor);
-        }
-      }
-      components.push(component);
-    }
+    const grainRels = manifest.relationships.filter(
+      (r) => grainSet.has(r.between[0]) && grainSet.has(r.between[1])
+    );
+    const components = findConnectedComponents(table.grain_entities, grainRels);
 
     // Fully connected (1 component) is fine — standard M-M chain.
     // Fully disconnected (N components == N entities) is fine — sparse union.
