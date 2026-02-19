@@ -3,9 +3,8 @@ export type {
   Entity,
   MetricDef,
   Relationship,
-  TraversalRule,
-  MetricCluster,
-  ResolvedMetric,
+  PropagationEdge,
+  MetricPropagation,
   BftTable,
   Strategy,
 } from "./types.js";

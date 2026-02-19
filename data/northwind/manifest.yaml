@@ -1,0 +1,56 @@
+entities:
+  - name: Order
+    role: leaf
+    detail: true
+    estimated_rows: 830
+    metrics:
+      - name: freight
+        type: currency
+        nature: additive
+
+  - name: Product
+    role: leaf
+    detail: true
+    estimated_rows: 77
+    metrics:
+      - name: unit_price
+        type: currency
+        nature: non-additive
+      - name: units_in_stock
+        type: integer
+        nature: additive
+
+relationships:
+  - name: OrderDetails
+    between: [Order, Product]
+    type: many-to-many
+    estimated_links: 2155
+    weight_column: quantity
+
+propagations:
+  # freight (Order) allocates to Product through OrderDetails,
+  # weighted by quantity. Each product gets a share of the order's
+  # freight proportional to how many units were on that line.
+  - metric: freight
+    path:
+      - relationship: OrderDetails
+        target_entity: Product
+        strategy: allocation
+        weight: quantity_share
+
+  # unit_price (Product) uses sum_over_sum toward Order.
+  # The correct aggregation is SUM(weighted_price) / SUM(weight).
+  - metric: unit_price
+    path:
+      - relationship: OrderDetails
+        target_entity: Order
+        strategy: sum_over_sum
+        weight: product_weight
+
+  # units_in_stock (Product) stays reserve — stock levels don't
+  # meaningfully attribute to individual orders.
+
+bft_tables:
+  - name: order_product
+    metrics: [freight, unit_price, units_in_stock]
+    estimated_rows: 2155
