@@ -11,17 +11,17 @@ export function validate(manifest: Manifest): ValidationError[] {
 
   const entityMap = buildEntityMap(manifest.entities);
   const metricOwner = buildMetricOwnerMap(manifest.entities);
-  const relationshipMap = new Map(
-    manifest.relationships.map((r) => [r.name, r])
+  const relationshipNames = new Set(
+    manifest.relationships.map((r) => r.name)
   );
 
   checkDuplicateNames(manifest, errors);
   checkPositiveCardinalities(manifest, errors);
   checkRelationshipEntities(manifest, entityMap, errors);
   checkClusterMetrics(manifest, metricOwner, errors);
-  checkTraversalRules(manifest, metricOwner, relationshipMap, errors);
+  checkTraversalRules(manifest, metricOwner, relationshipNames, errors);
   checkNonAdditiveStrategies(manifest, metricOwner, errors);
-  checkGrainConnectivity(manifest, entityMap, relationshipMap, errors);
+  checkGrainConnectivity(manifest, entityMap, errors);
 
   return errors;
 }
@@ -178,13 +178,13 @@ function checkClusterMetrics(
 function checkTraversalRules(
   manifest: Manifest,
   metricOwner: Map<string, Entity>,
-  relationshipMap: Map<string, unknown>,
+  relationshipNames: Set<string>,
   errors: ValidationError[]
 ): void {
   for (const cluster of manifest.metric_clusters) {
     // Check weight_source references
     for (const rule of cluster.traversals) {
-      if (rule.weight_source && !relationshipMap.has(rule.weight_source)) {
+      if (rule.weight_source && !relationshipNames.has(rule.weight_source)) {
         errors.push({
           rule: "traversal-relationship-exists",
           message: `Traversal rule for "${rule.metric}" in cluster "${cluster.name}" references nonexistent relationship "${rule.weight_source}"`,
@@ -273,7 +273,6 @@ function checkNonAdditiveStrategies(
 function checkGrainConnectivity(
   manifest: Manifest,
   entityMap: Map<string, Entity>,
-  relationshipMap: Map<string, unknown>,
   errors: ValidationError[]
 ): void {
   for (const table of manifest.bft_tables) {
@@ -338,7 +337,9 @@ function checkGrainConnectivity(
       components.push(component);
     }
 
-    // If partially connected (some connected, some not), that's ambiguous
+    // Fully connected (1 component) is fine — standard M-M chain.
+    // Fully disconnected (N components == N entities) is fine — sparse union.
+    // Partially connected is ambiguous and likely a mistake.
     if (components.length > 1 && components.length < table.grain_entities.length) {
       const componentStrs = components.map((c) => c.join(", "));
       errors.push({

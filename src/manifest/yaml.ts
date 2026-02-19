@@ -2,6 +2,10 @@ import * as fs from "node:fs";
 import * as yaml from "js-yaml";
 import type { Manifest } from "./types.js";
 
+/**
+ * Parse a YAML string into a Manifest. The result is structurally unvalidated —
+ * call validate() on the returned manifest to check semantic correctness.
+ */
 export function parseManifest(yamlString: string): Manifest {
   const raw = yaml.load(yamlString) as Manifest;
   if (!raw || typeof raw !== "object") {

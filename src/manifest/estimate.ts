@@ -176,15 +176,6 @@ function estimateComponentRows(
     }
   }
 
-  // BFS from first entity, building a spanning tree
-  const visited = new Set<string>();
-  const queue: { entity: string; rows: number; path: string[] }[] = [
-    { entity: component[0], rows: 0, path: [component[0]] },
-  ];
-
-  let result = 0;
-  let firstRel = true;
-
   // Track the order of relationships added to the spanning tree
   const spanRels: Relationship[] = [];
 
@@ -210,7 +201,7 @@ function estimateComponentRows(
   }
 
   // First relationship: base = links
-  result = spanRels[0].estimated_links;
+  let result = spanRels[0].estimated_links;
   breakdown.push(
     `${spanRels[0].name}: ${spanRels[0].estimated_links} links (base)`
   );
