@@ -142,14 +142,77 @@ interface BftTable {
 }
 ```
 
-## Open Questions
+## Resolved Questions
 
-- Formal verification: does the rollup invariant hold for all strategy combinations (allocation × elimination, allocation × reserve, etc.) when propagation paths are composed?
-- How does M-to-1 fit? The "one" side is a dimension. Does it get a propagation edge or is it handled as a column join without affecting the grain?
-- When a metric mixes strategies (reserve for B, allocation for C), how exactly do the reserve rows interact with the allocated values? Need concrete examples.
-- What's the right default for elimination direction? Should the system suggest "eliminate across the entity with fewer instances" (smaller fan-out = smaller reserve row correction)?
-- How do shared-dimension edges differ from junction-table edges in the schema? They have different weight computation mechanisms.
+### Rollup Invariant
 
-## Status
+**Holds for all strategy combinations.** The key is that entities in a metric's propagation path get the declared strategy; entities outside the path get reserve automatically. Reserve's "zero on regular rows" property prevents fan-out corruption.
 
-Design exploration in progress. These findings will reshape the manifest schema before codegen work begins. The current P3 types.ts schema is a working first draft that will evolve to incorporate these discoveries.
+- Allocation × Allocation: values split at each hop, summing reverses each split. Correct.
+- Allocation × Reserve: allocated values only appear on reserve rows of the uninvolved entity. Summing across that entity recovers the allocated value. Correct.
+- Elimination × Reserve: elimination values appear on reserve rows of uninvolved entities. Fan-out of the uninvolved entity multiplies zeros. Correct.
+- Reserve × Reserve: all zeros except reserve rows. Trivially correct.
+
+### M-to-1 Handling
+
+**No schema change needed.** M-to-1 works identically to M-to-M for strategy purposes. The "one" side is an entity if it has metrics; otherwise it's a joined column (not modeled as an entity). M-to-1 only affects `estimated_links` (same as the "many" count), not strategy logic.
+
+### Mixed Strategies (Reserve for B, Allocation for C)
+
+Work naturally. The propagation path determines WHERE the value lives:
+- Entities in the path get their strategy's values on real rows
+- Entities outside the path get zeros on real rows, values on reserve rows
+
+Example: tuition (Student) allocated to Class, reserve for Professor. In a Student × Class × Professor table, allocated values appear only on Professor=RESERVE rows. Rolling up across Professor recovers the Class-level allocation. Rolling up across Class recovers the Student total.
+
+### Elimination Direction Defaults
+
+"Eliminate across the entity with fewer instances" is a good heuristic — minimizes the reserve row correction magnitude. This is a wizard/UX suggestion, not a schema constraint. Computable from `estimated_rows`.
+
+### Shared Dimensions
+
+No new relationship type needed. Shared dimensions are multi-hop propagation paths through a shared entity. Example: Student → Department → Professor, where Department connects two otherwise-unrelated entities. The shared entity enters the grain naturally when a metric propagates through it.
+
+## Additional Findings
+
+### 10. Reserve Means UNION ALL, Not CROSS JOIN
+
+When two entities are all-reserve for each other, the codegen emits UNION ALL — separate row sets joined through any shared dimension. There is no cross product to generate or optimize away; reserve IS the sparse shape.
+
+This has implications for estimation: when all metrics between two entities use reserve, their row counts should be **added**, not multiplied. The cross product never exists.
+
+### 11. Shared Dimension Alignment
+
+Two operationally unrelated entities (e.g., Facilities and Admissions) that share a time dimension (Month) can coexist in one table. Month is declared as an entity with relationships to both. The codegen joins each side through Month via UNION ALL, giving a combined table aligned on the shared dimension.
+
+The shared entity provides explicit join semantics — no naming convention needed. The relationships declare HOW to join. Without them, column alignment would depend on matching column names (fragile).
+
+### 12. Completely Unrelated Entities Are Valid
+
+Two entities with no relationship at all can share a table with all-reserve metrics. This is a sparse union — each entity's rows appear independently. Mathematically sound (reserve never produces incorrect sums). Validation may warn but should not block.
+
+## Current State
+
+**Done:**
+- types.ts updated to new schema (MetricPropagation, PropagationEdge replace MetricCluster, TraversalRule, ResolvedMetric)
+- validate.ts rewritten: propagation path validation (connected paths, no cycles, strategy constraints)
+- estimate.ts rewritten: deriveGrainEntities() computes grain from propagation paths
+- yaml.ts updated for new schema
+- 38 tests passing against new schema
+- Reference manifests: university (synthetic data + manifest) and northwind (manifest for existing data)
+- Branch: `feat/reference-manifests` (2 commits, not yet PR'd)
+- All open questions resolved
+
+**Not done:**
+- estimateRows needs to detect all-reserve entity pairs and add rather than multiply
+- Test manifests for shared-dimension and unrelated-entity cases
+- spec.md and system-design.md not yet updated to reflect new schema
+- P2 (codegen) blocked until schema stabilizes
+
+## Next Steps
+
+1. Fix estimateRows to handle all-reserve pairs (add, don't multiply)
+2. Build test manifests: shared dimension (Month), unrelated entities (pure reserve), shared dimension with propagation
+3. Update spec.md and system-design.md
+4. PR the schema changes
+5. Then proceed to P2 (codegen)

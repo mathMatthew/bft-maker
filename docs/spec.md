@@ -109,22 +109,39 @@ This phase is discovery and scoping. The user identifies their entities, declare
 
 This is the "click on the entity name" moment. If you want Customer Name on your report, you're carrying Customer-level detail — every customer becomes a row. If you only need Customer_Revenue as an org-level total, customers don't contribute rows. This decision determines which entities have "their own" rows in the final table and therefore which foreign-metric situations Phase B needs to resolve.
 
+Metrics are declared on their home entity:
+
 ```yaml
 entities:
   - name: Student
     role: leaf
     detail: true    # student-level rows in the output
     estimated_rows: 45000
+    metrics:
+      - name: tuition_paid
+        type: currency
+        nature: additive
+      - name: satisfaction_score
+        type: rating
+        nature: non-additive
 
   - name: Class
     role: bridge
     detail: true
     estimated_rows: 1200
+    metrics:
+      - name: class_budget
+        type: currency
+        nature: additive
 
   - name: Professor
     role: leaf
     detail: true
     estimated_rows: 800
+    metrics:
+      - name: salary
+        type: currency
+        nature: additive
 
 relationships:
   - name: Enrollment
@@ -136,132 +153,109 @@ relationships:
     between: [Class, Professor]
     type: many-to-many
     estimated_links: 1800
-
-metrics:
-  - name: tuition_paid
-    entity: Student
-    type: currency
-    nature: additive
-
-  - name: class_budget
-    entity: Class
-    type: currency
-    nature: additive
-
-  - name: salary
-    entity: Professor
-    type: currency
-    nature: additive
-
-  - name: satisfaction_score
-    entity: Student
-    type: rating
-    nature: non-additive
-
-  - name: years_experience
-    entity: Professor
-    type: integer
-    nature: non-additive
 ```
 
 Entities may or may not have relationships with each other. Six unrelated entities sharing only a time and org dimension is a valid input. Two entities connected through a many-to-many bridge is a valid input. A mix of both is a valid input. The engine handles the full spectrum.
+
+Relationships are **undirected** — they describe what joins exist, not which way data flows. Direction comes later, implicitly, from each metric's propagation path.
 
 Entity roles matter when relationships exist. A **bridge** entity sits between two **leaf** entities and mediates their many-to-many relationship. When no relationships exist, roles are informational only.
 
 Cardinalities are declared upfront so the system can estimate output table sizes in Phase C. The fan-out multiplier for each many-to-many relationship is `links / bridge rows`.
 
-**Phase A outputs:** A complete inventory of entities (with detail flags), relationships, cardinalities, and metrics. No strategy decisions have been made yet.
+**Phase A outputs:** A complete inventory of entities (with detail flags and metrics), relationships, and cardinalities. No strategy decisions have been made yet.
 
 ---
 
-### Phase B: Coexistence and Traversal
+### Phase B: Propagation
 
-*Which metrics need to appear together, and when a metric shows up on rows that aren't its own, what does it mean?*
+*For each metric that isn't staying on its own rows (reserve), how does it spread to other entities, and what does it mean when it gets there?*
 
-This phase has two parts.
+Every metric starts as **reserve** — it contributes nothing to foreign rows and its total lives on a placeholder reserve row. Reserve is the safe, assumption-free default. No propagation path needs to be declared for it.
 
-#### Part 1: Metric Clustering
+The user upgrades metrics away from reserve one at a time:
 
-The user identifies which metrics must be visible on the same report. Not specific reports with named columns — just the clusters of metrics that need to coexist.
+> *"Tuition is currently reserve — professors won't see any tuition on their rows. Is that what you want?"*
+>
+> If no: *"Should every professor see the full tuition (as context), or should tuition be distributed across professors (as attribution)?"*
+>
+> If distributed: *"Tuition can be allocated through Enrollment to Class, then through Assignment to Professor. Should each hop use the relationship's weight, or equal split?"*
+
+Each answer defines a **propagation path** — an ordered sequence of hops from the metric's home entity outward through relationships.
 
 ```yaml
-metric_clusters:
-  - name: financial_overview
-    metrics: [tuition_paid, salary, class_budget]
+propagations:
+  # tuition_paid (Student) allocates outward through Enrollment to Class,
+  # then through Assignment to Professor.
+  - metric: tuition_paid
+    path:
+      - relationship: Enrollment
+        target_entity: Class
+        strategy: allocation
+        weight: enrollment_share
+      - relationship: Assignment
+        target_entity: Professor
+        strategy: allocation
+        weight: assignment_share
 
-  - name: student_experience
-    metrics: [tuition_paid, satisfaction_score]
+  # class_budget (Class) uses elimination toward Student.
+  # Does not propagate to Professor (reserve by default).
+  - metric: class_budget
+    path:
+      - relationship: Enrollment
+        target_entity: Student
+        strategy: elimination
+
+  # satisfaction_score (Student) uses sum_over_sum toward Class.
+  - metric: satisfaction_score
+    path:
+      - relationship: Enrollment
+        target_entity: Class
+        strategy: sum_over_sum
+        weight: satisfaction_weight
+
+  # salary (Professor) stays reserve for all foreign entities.
+  # Not listed — reserve is the default.
 ```
 
-A metric can appear in multiple clusters. The purpose of clustering is to identify which metrics will land in the same flat table, not to design specific reports.
+**Direction is implicit.** Each metric propagates outward from its home entity. The path lists target entities in order. Relationships are undirected; the metric's home determines the direction.
 
-#### Part 2: Traversal Resolution
+**Each metric has its own path.** Two metrics from the same entity can use different paths. Tuition might allocate through Enrollment, while satisfaction propagates through a different relationship. The table's grain is the union of all entities across all paths.
 
-For each cluster, the system identifies every metric that will appear on rows belonging to a different entity than its home. This happens in two situations:
+**Entities not in the path get reserve.** If tuition propagates Student → Class but the table also includes Professor, tuition is automatically reserve for Professor. No declaration needed.
 
-1. **Entities are connected through an M-M relationship.** The grain produces rows where both entities' metrics must coexist. A Student × Class × Professor grain means every row carries Student metrics, Class metrics, and Professor metrics together.
+**The feedback loop.** Sometimes the user wants attribution but has no relationship to support it. "I want to see revenue per employee, but there's no link between Customers and Employees." This is a signal to go back to Phase A and either declare a missing relationship (maybe through an Account or Project bridge), create a multi-hop path through a shared dimension (like Org), or accept reserve.
 
-2. **Multiple entities with detail carry rows in the same table.** Even with no relationship, if both Customer and Employee contribute detail rows, Customer_Revenue must have a value on Employee rows and Employee_Salary must have a value on Customer rows.
+**Shared dimensions.** Two unrelated entities can be connected through a shared entity like Month or Department. The propagation path goes through the shared entity using two relationships. The shared entity enters the grain, providing explicit alignment — no naming convention needed.
 
-In both cases, the question is the same: **what should this metric show on rows that aren't its own?**
-
-The default answer is always **Reserve** — the metric contributes nothing to foreign rows and its total lives on a placeholder. From there, the user can upgrade:
-
-> *"Customer_Revenue will default to a reserve row. Employees won't see any revenue on their rows. Is that what you want?"*
->
-> If no: *"Should every employee see the full regional revenue (as context), or should revenue be distributed across employees (as attribution)?"*
->
-> If distributed: *"We can distribute based on [declared relationship] or by equal share within the org. Which reflects your intent?"*
-
-Each answer maps to a strategy. The user never sees strategy names — they choose between concrete descriptions of what the number means on the report.
-
-When a relationship exists, it provides a natural weight for allocation (enrollment share, assignment load, account ownership). When no relationship exists, the available weights come from shared dimensions (org headcount, equal split). The available options depend on the declared relationships in Phase A.
-
-**The feedback loop.** Sometimes the user reaches a traversal question and realizes they want attribution but have no relationship to support it. "I want to see revenue per employee, but there's no link between Customers and Employees." This is a signal to go back to Phase A and either declare a missing relationship (maybe through an Account or Project bridge) or accept that the attribution will be approximate (allocated by org share). This loop is expected — it means the user is discovering something about their data, not that they made a mistake.
-
-**Phase B outputs:** Metric clusters with fully resolved traversal rules. Every metric in every cluster has an unambiguous meaning on every entity's rows. No commitment to table shape has been made yet.
+**Phase B outputs:** Propagation paths for every non-reserve metric. Every metric has an unambiguous meaning on every entity's rows. No commitment to table shape has been made yet.
 
 ---
 
 ### Phase C: Topology
 
-*Given the clusters, how many flat tables do you want, and how big will they be?*
+*Given the propagation paths, how many flat tables do you want, and how big will they be?*
 
 This is a tradeoff decision, not a derivable answer. The options are presented; the user chooses.
 
 #### What Gets Computed
 
-For each metric cluster from Phase B, identify the minimum set of entities and relationships required, and estimate the resulting row count.
+The grain of a table is **derived** from its metrics' propagation paths. The grain is the union of all entities touched: each metric's home entity plus all target entities in its path. No manual grain specification needed.
 
 ```
-Cluster: financial_overview
-  Requires: Student, Class, Professor
-  Relationships: Enrollment + Assignment
+Table: department_financial
+  Metrics: tuition_paid, class_budget, salary
+  tuition_paid chain: {Student, Class, Professor}
+  class_budget chain: {Class, Student} → subset, absorbed
+  salary chain: {Professor} → subset, absorbed
   Grain: Student × Class × Professor
   Estimated rows: ~180,000 + reserve rows
 
-Cluster: student_experience
-  Requires: Student, Class
-  Relationships: Enrollment only
+Table: student_advising
+  Metrics: tuition_paid, satisfaction_score, class_budget
+  All chains within {Student, Class}
   Grain: Student × Class
   Estimated rows: ~120,000
-```
-
-Then show the merge options:
-
-```
-Option A: Two separate tables
-  Table 1 (financial_overview): ~180,800 rows
-  Table 2 (student_experience): ~120,000 rows
-  Total rows: ~300,800
-  Tradeoff: Cannot see salary and satisfaction on the same report.
-
-Option B: One merged table
-  Table 1 (combined): ~180,800 rows
-  Total rows: ~180,800
-  Tradeoff: Every row carries the Professor dimension even when
-  the student_experience metrics don't need it. Satisfaction
-  traversal must be re-resolved for the finer grain.
 ```
 
 Row estimates come from Phase A cardinalities:
@@ -269,9 +263,10 @@ Row estimates come from Phase A cardinalities:
 - One M-M bridge: rows ≈ link count
 - Two M-M bridges sharing an entity: rows ≈ links₁ × (links₂ / shared entity count)
 - Each additional bridge: multiply by its fan-out
-- Unrelated entities with detail: rows ≈ sum of entity rows (sparse union)
 
-If merging clusters would produce millions of rows, the user sees that cost before committing.
+**Independent chains use UNION ALL, not cross product.** When two metrics have propagation chains that no single metric spans, the codegen emits UNION ALL. Their row counts are added, not multiplied. Example: Building × Month (60 rows) and Program × Month (36 rows) with no metric spanning Building-to-Program = 96 rows, not 180.
+
+If merging tables would produce millions of rows, the user sees that cost before committing.
 
 #### Simplification Suggestions
 
@@ -319,40 +314,22 @@ The user can accept any combination of suggestions, reject all of them, or use t
 
 #### What the User Decides
 
-The user picks a topology, informed by the cost estimates and the simplification suggestions. Once the topology is locked, the manifest is complete.
+The user picks a topology, informed by the cost estimates and the simplification suggestions. Tables just list which metrics to include — the grain and row estimate are derived from the propagation paths defined in Phase B.
 
 ```yaml
 bft_tables:
   - name: department_financial
-    grain: Student × Class × Professor
-    clusters_served: [financial_overview]
-    estimated_rows: 180800
-    metrics:
-      - metric: tuition_paid
-        strategy: allocation
-        weight: enrollment_share
-      - metric: salary
-        strategy: allocation
-        weight: assignment_share
-      - metric: class_budget
-        strategy: allocation
-        weight: enrollment_count
-    reserve_rows:
-      - <Reserve Professor>
+    metrics: [tuition_paid, class_budget, salary]
+    # Derived grain: Student × Class × Professor
+    # Estimated rows: ~180,000
 
   - name: student_advising
-    grain: Student × Class
-    clusters_served: [student_experience]
-    estimated_rows: 120000
-    metrics:
-      - metric: tuition_paid
-        strategy: direct
-      - metric: satisfaction_score
-        strategy: sum_over_sum
-        weight_column: satisfaction_weight
+    metrics: [tuition_paid, satisfaction_score, class_budget]
+    # Derived grain: Student × Class
+    # Estimated rows: ~120,000
 ```
 
-**Phase C outputs:** The final table topology with grain, row estimates, and strategy assignments. The manifest is now complete and ready for code generation.
+**Phase C outputs:** The final table topology. The manifest is now complete and ready for code generation.
 
 ---
 
@@ -452,11 +429,11 @@ Reserve rows (`<Reserve Class>`, `<Reserve Employee>`, etc.) must be present in 
 
 bft-maker is a pipeline with three decision phases and a mechanical code generator.
 
-**Phase A** inventories the data: entities, joins, cardinalities, metrics, and the level of detail needed per entity.
+**Phase A** inventories the data: entities (with their metrics), joins, cardinalities, and the level of detail needed per entity.
 
-**Phase B** resolves coexistence: which metrics need to be seen together, and what does each metric mean when it appears on rows belonging to a different entity. This produces metric clusters with traversal rules. Phase B may loop back to Phase A when traversal questions reveal missing relationships or unnecessary detail.
+**Phase B** resolves propagation: for each metric that isn't staying reserve, define a propagation path — which relationships to traverse, what strategy at each hop. Everything starts as reserve. Phase B may loop back to Phase A when propagation questions reveal missing relationships or unnecessary detail.
 
-**Phase C** resolves topology: given the clusters, how many tables, at what row cost, with what tradeoffs. The engine suggests the highest-impact simplifications before the user commits. The user chooses. The manifest is complete.
+**Phase C** resolves topology: given the propagation paths, how many tables, at what row cost, with what tradeoffs. Grain and row estimates are derived from the paths. The user chooses. The manifest is complete.
 
 Then the machine takes over:
 

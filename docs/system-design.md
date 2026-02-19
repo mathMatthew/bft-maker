@@ -14,9 +14,11 @@ bft-maker/
 │   ├── manifest/
 │   │   ├── types.ts              # Manifest schema (TypeScript interfaces)
 │   │   ├── validate.ts           # Manifest validation and consistency checks
-│   │   └── estimate.ts           # Row count and cost estimators
+│   │   ├── estimate.ts           # Row count and cost estimators
+│   │   ├── graph.ts              # Graph utilities (connected components)
+│   │   └── yaml.ts               # YAML parse/serialize/load/save
 │   │
-│   ├── codegen/
+│   ├── codegen/                  # (not yet implemented)
 │   │   ├── planner.ts            # Manifest → ordered build plan
 │   │   ├── sql/
 │   │   │   ├── allocation.ts     # Allocation strategy template
@@ -34,13 +36,12 @@ bft-maker/
 │       └── index.ts              # CLI entry point
 │
 ├── test/
-│   ├── manifest/                 # Unit tests for validation and estimation
-│   ├── codegen/                  # Snapshot tests: manifest in → SQL out
-│   └── fixtures/                 # Sample manifests + synthetic data
+│   └── manifest/                 # Unit tests for validation and estimation
 │
-├── data/                         # Test datasets (downloaded, not in git)
-│   ├── northwind/
-│   └── movielens/
+├── data/                         # Reference datasets and manifests
+│   ├── northwind/                # Manifest for Northwind (data exists already)
+│   ├── university/               # Synthetic university data + manifest
+│   └── university-ops/           # Shared-dimension example (facilities + admissions)
 │
 ├── docs/
 │   ├── spec.md                   # What bft-maker does and how manifests work
@@ -48,7 +49,7 @@ bft-maker/
 │
 ├── dist/                         # Compiled output
 ├── tsconfig.json
-└── package.json                  # devDependencies only: typescript
+└── package.json                  # devDependencies only: typescript, js-yaml
 ```
 
 ---
@@ -72,13 +73,15 @@ The manifest is a plain object conforming to `types.ts`. It can be written by ha
 
 ## Manifest Schema
 
-The manifest is the contract. Everything downstream is mechanical. The TypeScript interfaces are the source of truth; YAML serialization is just for human readability and version control.
+The manifest is the contract. Everything downstream is mechanical. The TypeScript interfaces in `types.ts` are the source of truth; YAML serialization is just for human readability and version control.
 
 ```typescript
+type Strategy = "reserve" | "elimination" | "allocation" | "sum_over_sum" | "direct";
+
 interface Manifest {
   entities: Entity[];
   relationships: Relationship[];
-  metric_clusters: MetricCluster[];
+  propagations: MetricPropagation[];
   bft_tables: BftTable[];
 }
 
@@ -96,6 +99,7 @@ interface MetricDef {
   nature: "additive" | "non-additive";
 }
 
+/** Relationships are undirected — they describe what joins exist. */
 interface Relationship {
   name: string;
   between: [string, string];
@@ -104,62 +108,91 @@ interface Relationship {
   weight_column?: string;        // e.g., "assignment_share"
 }
 
-interface MetricCluster {
-  name: string;
-  metrics: string[];             // references to MetricDef.name
-  traversals: TraversalRule[];
+/**
+ * Defines how a metric propagates from its home entity to foreign entities.
+ * Direction is implicit: always outward from the metric's home entity.
+ * Metrics not listed here default to reserve (no propagation needed).
+ */
+interface MetricPropagation {
+  metric: string;                // metric name (home entity is known)
+  path: PropagationEdge[];       // ordered edges from home outward
 }
 
-interface TraversalRule {
-  metric: string;
-  on_foreign_rows: Strategy;
-  weight?: string;               // for allocation: column name or "equal_split"
-  weight_source?: string;        // relationship name or shared dimension
+/**
+ * A single hop in a metric's propagation path.
+ */
+interface PropagationEdge {
+  relationship: string;          // which relationship to traverse
+  target_entity: string;         // which entity this edge reaches
+  strategy: Strategy;            // what happens when crossing this edge
+  weight?: string;               // for allocation/sum_over_sum: weight mechanism
 }
 
-type Strategy = "reserve" | "elimination" | "allocation" | "sum_over_sum" | "direct";
-
+/**
+ * A BFT table. Grain is derived from the union of all entities
+ * across all included metrics' propagation paths.
+ */
 interface BftTable {
   name: string;
-  grain: string;                 // e.g., "Student × Class × Professor"
-  grain_entities: string[];
-  clusters_served: string[];
-  estimated_rows: number;
-  metrics: ResolvedMetric[];
-  reserve_rows: string[];        // e.g., ["<Reserve Professor>"]
-}
-
-interface ResolvedMetric {
-  metric: string;
-  strategy: Strategy;
-  weight?: string;
-  weight_column?: string;        // output column name for sum/sum
-  sum_safe: boolean;
+  metrics: string[];             // which metrics to include
+  estimated_rows?: number;       // optional manual override
 }
 ```
+
+### Key Design Decisions
+
+**Per-metric propagation paths replace metric clusters.** The old schema grouped metrics into clusters with traversal rules per cluster. The new schema defines propagation per-metric. Each metric has a path describing how it spreads from its home entity outward. Entities not in the path default to reserve.
+
+**Grain is derived, not declared.** The table grain is the union of all entities touched by the table's metrics (home entities + propagation targets). No manual grain specification needed.
+
+**Relationships are undirected.** Relationships describe what joins exist. Direction comes from each metric's propagation path — always outward from the metric's home entity.
+
+**Reserve is the default.** Any entity not mentioned in a metric's propagation path gets reserve treatment for that metric. Only non-reserve propagation needs to be declared.
 
 ---
 
 ## Cost Estimator
 
-Row estimation is deterministic from Phase A cardinalities. The formulas live in `estimate.ts`:
+Row estimation is deterministic from Phase A cardinalities and propagation paths. The formulas live in `estimate.ts`.
+
+### Row estimation for a set of grain entities
 
 ```typescript
 function estimateRows(
   entities: Entity[],
   relationships: Relationship[],
   grainEntities: string[]
-): number;
+): RowEstimate;
 ```
 
 Rules:
 - Single entity with detail: `entity.estimated_rows`
 - One M-M bridge: `relationship.estimated_links`
 - Two M-M bridges sharing a bridge entity: `links₁ × (links₂ / bridge.estimated_rows)`
-- Unrelated entities both with detail: sum of row counts (sparse union)
+- Disconnected entities (no M-M connecting them): sum of row counts (sparse union)
 - Reserve rows: +1 per entity that has reserve-strategy metrics
 
-The estimator also computes the fan-out multiplier per relationship, which Phase C uses to rank simplification impact.
+### Table-level estimation with independent chains
+
+```typescript
+function estimateTableRows(manifest: Manifest, table: BftTable): RowEstimate;
+```
+
+`estimateTableRows` is aware of propagation paths and detects **independent chains**. Each metric's propagation path defines a chain of entities (home + targets). When no single metric spans two chains, the codegen emits UNION ALL — not a cross product. The estimation reflects this:
+
+- Each metric's chain: `{home_entity} ∪ {target entities in path}`
+- Subset chains are absorbed by larger chains (their rows ride along)
+- Independent chains (no metric spans both) are summed, not multiplied
+
+Example: Building → Month (60 links) and Program → Month (36 links), no metric spanning Building-to-Program. Estimate: 60 + 36 = 96 rows. Not Building × Month × Program = 180.
+
+### Grain derivation
+
+```typescript
+function deriveGrainEntities(manifest: Manifest, table: BftTable): string[];
+```
+
+The grain is the union of all entities touched by the table's metrics: each metric's home entity plus all target entities in its propagation path. Metrics with no propagation contribute only their home entity.
 
 ---
 
@@ -277,33 +310,29 @@ npx bft-maker validate --manifest manifest.yaml
 
 ## Testing Strategy
 
-### Unit Tests
+### Unit Tests (Node built-in test runner)
 
 Pure function inputs and outputs. No SQL execution.
 
-- `manifest/validate.ts`: feed it invalid manifests, assert it catches every inconsistency (missing relationship references, orphan metrics, impossible grains).
-- `manifest/estimate.ts`: known cardinalities in, expected row counts out.
-- `codegen/sql/*.ts`: snapshot tests. A fixture manifest produces expected SQL strings. When templates change, snapshots update.
+- `test/manifest/validate.test.ts`: feeds invalid manifests, asserts every inconsistency is caught (missing relationship references, disconnected paths, cycles, non-additive strategy constraints). Also validates all reference manifests.
+- `test/manifest/estimate.test.ts`: known cardinalities in, expected row counts out. Tests independent chain detection, subset absorption, UNION ALL vs cross product behavior.
+- `test/manifest/yaml.test.ts`: YAML round-trip (serialize → parse → compare), structural parsing.
 
-### Integration Tests
+### Reference Manifests
 
-A small set of end-to-end tests:
+The `data/` directory contains manifests exercising different patterns:
 
-1. Feed the manifest to the code generator.
-2. Execute the SQL against DuckDB with synthetic data.
-3. Assert validation queries return zero rows.
-4. Assert `SUM` of allocated metrics equals `SUM` of originals.
+- **university**: Students, Classes, Professors — multi-hop allocation, elimination, sum_over_sum
+- **northwind**: Orders, Products — allocation by quantity, sum_over_sum for price
+- **university-ops**: Facilities + Admissions sharing Month — shared-dimension alignment, independent chains, UNION ALL estimation
 
-### Fixture Manifests
+### Integration Tests (planned)
 
-The `test/fixtures/` directory contains complete manifests for:
-
-- **University**: Students, Classes, Professors (the running example from the spec)
-- **Northwind**: Orders, Products, Employees with Northwind dataset
-- **Simple**: Two unrelated entities sharing only time and org dimensions
-- **Single entity**: Degenerate case — one entity, no foreign metrics, no strategies needed
-
-Each fixture includes synthetic source data and expected output characteristics.
+Once codegen is implemented:
+1. Feed manifest to code generator
+2. Execute SQL against DuckDB with synthetic data
+3. Assert validation queries return zero rows
+4. Assert `SUM` of allocated metrics equals `SUM` of originals
 
 ---
 

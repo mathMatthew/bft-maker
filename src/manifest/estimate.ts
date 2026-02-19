@@ -107,13 +107,14 @@ export function deriveGrainEntities(manifest: Manifest, table: BftTable): string
 
 /**
  * Estimate rows for a BFT table, deriving grain from propagation paths.
+ *
+ * When metrics have independent propagation chains (no single metric spans
+ * both), the codegen emits UNION ALL — not a cross product. The estimation
+ * reflects this: independent chains contribute additive row counts.
  */
 export function estimateTableRows(manifest: Manifest, table: BftTable): RowEstimate {
   const grainEntities = deriveGrainEntities(manifest, table);
-  const base = estimateRows(manifest.entities, manifest.relationships, grainEntities);
 
-  // Count reserve rows: entities whose metrics are in this table but have
-  // no propagation path (default = reserve), or have reserve/elimination edges
   const metricOwner = new Map<string, string>();
   for (const entity of manifest.entities) {
     for (const m of entity.metrics) {
@@ -122,6 +123,37 @@ export function estimateTableRows(manifest: Manifest, table: BftTable): RowEstim
   }
   const propMap = new Map(manifest.propagations.map((p) => [p.metric, p]));
 
+  // Compute each metric's entity chain: home entity + propagation targets
+  const chains: Set<string>[] = [];
+  for (const metricName of table.metrics) {
+    const owner = metricOwner.get(metricName);
+    if (!owner) continue;
+    const chain = new Set<string>([owner]);
+    const prop = propMap.get(metricName);
+    if (prop) {
+      for (const edge of prop.path) chain.add(edge.target_entity);
+    }
+    chains.push(chain);
+  }
+
+  // Remove duplicate and subset chains — subsets ride along on larger chains
+  const effectiveChains = removeSubsetChains(chains);
+
+  // Estimate each chain independently and sum (UNION ALL)
+  let totalRows = 0;
+  const breakdown: string[] = [];
+  for (const chain of effectiveChains) {
+    const est = estimateRows(manifest.entities, manifest.relationships, [...chain]);
+    totalRows += est.rows;
+    breakdown.push(...est.breakdown);
+  }
+  if (effectiveChains.length > 1) {
+    breakdown.push(
+      `${effectiveChains.length} independent row groups (UNION ALL)`
+    );
+  }
+
+  // Count reserve rows: entities whose metrics are pure reserve or use elimination
   const reserveEntities = new Set<string>();
   for (const metricName of table.metrics) {
     const owner = metricOwner.get(metricName);
@@ -129,13 +161,10 @@ export function estimateTableRows(manifest: Manifest, table: BftTable): RowEstim
 
     const prop = propMap.get(metricName);
     if (!prop) {
-      // No propagation = pure reserve. Needs a reserve row if this entity
-      // is not the only entity in the grain.
       if (grainEntities.length > 1) {
         reserveEntities.add(owner);
       }
     } else {
-      // Check if any edge uses reserve or elimination
       for (const edge of prop.path) {
         if (edge.strategy === "reserve" || edge.strategy === "elimination") {
           reserveEntities.add(owner);
@@ -146,14 +175,47 @@ export function estimateTableRows(manifest: Manifest, table: BftTable): RowEstim
 
   const reserveCount = reserveEntities.size;
   if (reserveCount > 0) {
-    base.breakdown.push(
+    breakdown.push(
       `Reserve rows: +${reserveCount} (${[...reserveEntities].join(", ")})`
     );
   }
 
-  base.reserve_row_count = reserveCount;
-  base.total = base.rows + reserveCount;
-  return base;
+  return {
+    rows: totalRows,
+    reserve_row_count: reserveCount,
+    total: totalRows + reserveCount,
+    grain_entities: grainEntities,
+    breakdown,
+  };
+}
+
+/**
+ * Remove duplicate and strict-subset chains. A chain that is a subset of
+ * another doesn't need its own row group — its rows are a subset of the
+ * larger chain's rows (with reserve values for the extra entities).
+ */
+function removeSubsetChains(chains: Set<string>[]): Set<string>[] {
+  // Deduplicate identical chains
+  const unique: Set<string>[] = [];
+  for (const chain of chains) {
+    if (!unique.some((u) => setsEqual(u, chain))) {
+      unique.push(chain);
+    }
+  }
+
+  // Remove strict subsets
+  return unique.filter(
+    (chain, i) =>
+      !unique.some((other, j) => i !== j && isStrictSubset(chain, other))
+  );
+}
+
+function setsEqual(a: Set<string>, b: Set<string>): boolean {
+  return a.size === b.size && [...a].every((e) => b.has(e));
+}
+
+function isStrictSubset(small: Set<string>, large: Set<string>): boolean {
+  return small.size < large.size && [...small].every((e) => large.has(e));
 }
 
 /**

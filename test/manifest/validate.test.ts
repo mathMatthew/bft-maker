@@ -1,7 +1,11 @@
 import { describe, it } from "node:test";
+import * as path from "node:path";
 import * as assert from "node:assert/strict";
 import { validate } from "../../src/manifest/validate.js";
+import { loadManifest } from "../../src/manifest/yaml.js";
 import type { Manifest } from "../../src/manifest/types.js";
+
+const dataDir = path.resolve(process.cwd(), "data");
 
 function validManifest(): Manifest {
   return {
@@ -253,6 +257,26 @@ describe("validate", () => {
       m.propagations.push({ metric: "ghost_metric", path: [] });
       const errors = validate(m);
       assert.ok(errors.length >= 3);
+    });
+  });
+
+  describe("reference manifests", () => {
+    it("university manifest validates", () => {
+      const m = loadManifest(path.join(dataDir, "university/manifest.yaml"));
+      const errors = validate(m);
+      assert.deepStrictEqual(errors, []);
+    });
+
+    it("northwind manifest validates", () => {
+      const m = loadManifest(path.join(dataDir, "northwind/manifest.yaml"));
+      const errors = validate(m);
+      assert.deepStrictEqual(errors, []);
+    });
+
+    it("university-ops manifest validates (shared dimension)", () => {
+      const m = loadManifest(path.join(dataDir, "university-ops/manifest.yaml"));
+      const errors = validate(m);
+      assert.deepStrictEqual(errors, []);
     });
   });
 });
