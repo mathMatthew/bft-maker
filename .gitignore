@@ -1,0 +1,10 @@
+node_modules/
+dist/
+data/movielens/
+data/northwind/
+*.js
+*.js.map
+*.d.ts
+!jest.config.js
+claude_next.sh
+claude_output.txt

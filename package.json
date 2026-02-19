@@ -1,0 +1,19 @@
+{
+  "name": "bft-maker",
+  "version": "0.1.0",
+  "description": "Big Flat Table maker — manifest-driven metric coexistence engine",
+  "type": "module",
+  "main": "dist/cli/index.js",
+  "bin": {
+    "bft-maker": "dist/cli/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "tsc && node --test dist/test/**/*.test.js"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  },
+  "license": "MIT"
+}
