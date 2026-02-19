@@ -102,21 +102,18 @@ function validManifest(): Manifest {
             strategy: "allocation",
             weight: "enrollment_share",
             sum_safe: true,
-            requires_reserve_rows: false,
           },
           {
             metric: "salary",
             strategy: "allocation",
             weight: "assignment_share",
             sum_safe: true,
-            requires_reserve_rows: false,
           },
           {
             metric: "class_budget",
             strategy: "allocation",
             weight: "enrollment_count",
             sum_safe: true,
-            requires_reserve_rows: false,
           },
         ],
         reserve_rows: [],
@@ -132,14 +129,12 @@ function validManifest(): Manifest {
             metric: "tuition_paid",
             strategy: "direct",
             sum_safe: true,
-            requires_reserve_rows: false,
           },
           {
             metric: "satisfaction_score",
             strategy: "sum_over_sum",
             weight_column: "satisfaction_weight",
             sum_safe: false,
-            requires_reserve_rows: false,
           },
         ],
         reserve_rows: [],
@@ -286,7 +281,6 @@ describe("validate", () => {
         metric: "years_experience",
         strategy: "elimination",
         sum_safe: true,
-        requires_reserve_rows: true,
       });
       const errors = validate(m);
       assert.ok(errors.some((e) => e.rule === "non-additive-strategy" && e.message.includes("years_experience")));

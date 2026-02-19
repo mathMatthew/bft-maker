@@ -1,4 +1,5 @@
 import type { Entity, Relationship, BftTable } from "./types.js";
+import { findConnectedComponents } from "./graph.js";
 
 export interface RowEstimate {
   rows: number;
@@ -115,42 +116,6 @@ export function fanOut(
   return relationship.estimated_links / bridgeEntity.estimated_rows;
 }
 
-export function findConnectedComponents(
-  entityNames: string[],
-  mmRels: Relationship[]
-): string[][] {
-  const adj = new Map<string, Set<string>>();
-  for (const name of entityNames) {
-    adj.set(name, new Set());
-  }
-  for (const rel of mmRels) {
-    const [a, b] = rel.between;
-    adj.get(a)?.add(b);
-    adj.get(b)?.add(a);
-  }
-
-  const visited = new Set<string>();
-  const components: string[][] = [];
-
-  for (const name of entityNames) {
-    if (visited.has(name)) continue;
-    const component: string[] = [];
-    const queue = [name];
-    while (queue.length > 0) {
-      const current = queue.shift()!;
-      if (visited.has(current)) continue;
-      visited.add(current);
-      component.push(current);
-      for (const neighbor of adj.get(current) ?? []) {
-        if (!visited.has(neighbor)) queue.push(neighbor);
-      }
-    }
-    components.push(component);
-  }
-
-  return components;
-}
-
 function estimateComponentRows(
   component: string[],
   mmRels: Relationship[],
@@ -225,8 +190,9 @@ function findSharedEntity(
   priorRels: Relationship[],
   entityMap: Map<string, Entity>
 ): Entity | undefined {
-  // The shared entity is the one that appears in both this relationship
-  // and one of the prior relationships
+  // In a BFS spanning tree, each new edge has exactly one endpoint already
+  // in the tree (the node BFS discovered it from). So exactly one of
+  // rel.between will appear in priorRels — the first match is correct.
   const priorEntities = new Set<string>();
   for (const pr of priorRels) {
     priorEntities.add(pr.between[0]);

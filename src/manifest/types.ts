@@ -46,7 +46,6 @@ export interface ResolvedMetric {
   weight?: string;
   weight_column?: string;
   sum_safe: boolean;
-  requires_reserve_rows: boolean;
 }
 
 export interface BftTable {

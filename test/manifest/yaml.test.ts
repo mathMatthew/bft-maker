@@ -60,7 +60,6 @@ function universityManifest(): Manifest {
             metric: "tuition_paid",
             strategy: "direct",
             sum_safe: true,
-            requires_reserve_rows: false,
           },
         ],
         reserve_rows: [],

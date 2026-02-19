@@ -135,7 +135,6 @@ interface ResolvedMetric {
   weight?: string;
   weight_column?: string;        // output column name for sum/sum
   sum_safe: boolean;
-  requires_reserve_rows: boolean;
 }
 ```
 

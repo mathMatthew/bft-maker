@@ -1,5 +1,5 @@
 import type { Manifest, Entity, MetricDef } from "./types.js";
-import { findConnectedComponents } from "./estimate.js";
+import { findConnectedComponents } from "./graph.js";
 
 export interface ValidationError {
   rule: string;
