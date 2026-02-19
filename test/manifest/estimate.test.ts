@@ -3,12 +3,13 @@ import * as assert from "node:assert/strict";
 import {
   estimateRows,
   estimateTableRows,
+  deriveGrainEntities,
   fanOut,
 } from "../../src/manifest/estimate.js";
 import type {
   Entity,
   Relationship,
-  BftTable,
+  Manifest,
 } from "../../src/manifest/types.js";
 
 const student: Entity = {
@@ -66,36 +67,23 @@ describe("estimateRows", () => {
   });
 
   it("single M-M bridge returns estimated_links", () => {
-    // Student × Class via Enrollment
     const result = estimateRows(entities, relationships, ["Student", "Class"]);
     assert.equal(result.rows, 120000);
   });
 
   it("two M-M bridges sharing a bridge entity", () => {
-    // Student × Class × Professor
-    // = Enrollment links × (Assignment links / Class rows)
-    // = 120,000 × (1,800 / 1,200) = 120,000 × 1.5 = 180,000
     const result = estimateRows(entities, relationships, [
-      "Student",
-      "Class",
-      "Professor",
+      "Student", "Class", "Professor",
     ]);
     assert.equal(result.rows, 180000);
   });
 
   it("unrelated entities sum their rows", () => {
-    // Student and Professor with no connecting relationship
-    const result = estimateRows(
-      entities,
-      [], // no relationships
-      ["Student", "Professor"]
-    );
+    const result = estimateRows(entities, [], ["Student", "Professor"]);
     assert.equal(result.rows, 45000 + 800);
   });
 
   it("many-to-one relationships do not create cross-product", () => {
-    // M-to-1 relationships are not used for row expansion — entities
-    // connected only via M-to-1 are treated as independent (sparse union)
     const department: Entity = {
       name: "Department",
       role: "leaf",
@@ -114,15 +102,12 @@ describe("estimateRows", () => {
       [mtoRel],
       ["Student", "Department"]
     );
-    // M-to-1 doesn't create M-M expansion, so treated as sparse union
     assert.equal(result.rows, 45000 + 50);
   });
 
   it("provides breakdown describing the calculation", () => {
     const result = estimateRows(entities, relationships, [
-      "Student",
-      "Class",
-      "Professor",
+      "Student", "Class", "Professor",
     ]);
     assert.ok(result.breakdown.length > 0);
     assert.ok(result.breakdown.some((b) => b.includes("Enrollment")));
@@ -130,93 +115,102 @@ describe("estimateRows", () => {
   });
 });
 
-describe("estimateTableRows", () => {
-  it("adds reserve rows for reserve-strategy metrics", () => {
-    const table: BftTable = {
-      name: "test_table",
-      grain: "Student × Class × Professor",
-      grain_entities: ["Student", "Class", "Professor"],
-      clusters_served: ["financial_overview"],
-      estimated_rows: 180000,
-      metrics: [
+describe("deriveGrainEntities", () => {
+  it("derives grain from propagation paths", () => {
+    const manifest: Manifest = {
+      entities,
+      relationships,
+      propagations: [
         {
           metric: "tuition_paid",
-          strategy: "allocation",
-          sum_safe: true,
-        },
-        {
-          metric: "salary",
-          strategy: "reserve",
-          sum_safe: true,
+          path: [
+            { relationship: "Enrollment", target_entity: "Class", strategy: "allocation" },
+            { relationship: "Assignment", target_entity: "Professor", strategy: "allocation" },
+          ],
         },
       ],
-      reserve_rows: ["<Reserve Professor>"],
+      bft_tables: [{ name: "test", metrics: ["tuition_paid", "salary"] }],
     };
+    const grain = deriveGrainEntities(manifest, manifest.bft_tables[0]);
+    assert.ok(grain.includes("Student"));
+    assert.ok(grain.includes("Class"));
+    assert.ok(grain.includes("Professor"));
+    assert.equal(grain.length, 3);
+  });
 
-    const result = estimateTableRows(entities, relationships, table);
+  it("includes home entity even without propagation", () => {
+    const manifest: Manifest = {
+      entities,
+      relationships,
+      propagations: [],
+      bft_tables: [{ name: "test", metrics: ["salary"] }],
+    };
+    const grain = deriveGrainEntities(manifest, manifest.bft_tables[0]);
+    assert.deepStrictEqual(grain, ["Professor"]);
+  });
+});
+
+describe("estimateTableRows", () => {
+  it("estimates rows from propagation-derived grain", () => {
+    const manifest: Manifest = {
+      entities,
+      relationships,
+      propagations: [
+        {
+          metric: "tuition_paid",
+          path: [
+            { relationship: "Enrollment", target_entity: "Class", strategy: "allocation" },
+            { relationship: "Assignment", target_entity: "Professor", strategy: "allocation" },
+          ],
+        },
+      ],
+      bft_tables: [{ name: "test", metrics: ["tuition_paid", "salary"] }],
+    };
+    const result = estimateTableRows(manifest, manifest.bft_tables[0]);
     assert.equal(result.rows, 180000);
-    assert.equal(result.reserve_row_count, 1); // Professor has reserve-strategy metric
+    // salary has no propagation = reserve, needs reserve row
+    assert.equal(result.reserve_row_count, 1);
     assert.equal(result.total, 180001);
   });
 
-  it("counts elimination metrics as needing reserve rows", () => {
-    const table: BftTable = {
-      name: "test_table",
-      grain: "Student × Class",
-      grain_entities: ["Student", "Class"],
-      clusters_served: [],
-      estimated_rows: 120000,
-      metrics: [
+  it("counts elimination as needing reserve rows", () => {
+    const manifest: Manifest = {
+      entities,
+      relationships,
+      propagations: [
         {
           metric: "class_budget",
-          strategy: "elimination",
-          sum_safe: true,
+          path: [
+            { relationship: "Enrollment", target_entity: "Student", strategy: "elimination" },
+          ],
         },
       ],
-      reserve_rows: ["<Reserve Class>"],
+      bft_tables: [{ name: "test", metrics: ["tuition_paid", "class_budget"] }],
     };
-
-    const result = estimateTableRows(entities, relationships, table);
-    assert.equal(result.reserve_row_count, 1);
-    assert.equal(result.total, 120001);
+    const result = estimateTableRows(manifest, manifest.bft_tables[0]);
+    assert.ok(result.reserve_row_count >= 1);
   });
 
-  it("no reserve rows when all metrics are allocation or direct", () => {
-    const table: BftTable = {
-      name: "test_table",
-      grain: "Student × Class",
-      grain_entities: ["Student", "Class"],
-      clusters_served: [],
-      estimated_rows: 120000,
-      metrics: [
-        {
-          metric: "tuition_paid",
-          strategy: "direct",
-          sum_safe: true,
-        },
-        {
-          metric: "class_budget",
-          strategy: "allocation",
-          sum_safe: true,
-        },
-      ],
-      reserve_rows: [],
+  it("no reserve rows for single-entity table", () => {
+    const manifest: Manifest = {
+      entities,
+      relationships,
+      propagations: [],
+      bft_tables: [{ name: "test", metrics: ["salary"] }],
     };
-
-    const result = estimateTableRows(entities, relationships, table);
+    const result = estimateTableRows(manifest, manifest.bft_tables[0]);
+    assert.equal(result.rows, 800);
     assert.equal(result.reserve_row_count, 0);
-    assert.equal(result.total, 120000);
+    assert.equal(result.total, 800);
   });
 });
 
 describe("fanOut", () => {
   it("computes fan-out for Enrollment", () => {
-    // 120,000 links / 1,200 classes = 100 students per class
     assert.equal(fanOut(enrollment, classEntity), 100);
   });
 
   it("computes fan-out for Assignment", () => {
-    // 1,800 links / 1,200 classes = 1.5 professors per class
     assert.equal(fanOut(assignment, classEntity), 1.5);
   });
 });

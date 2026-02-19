@@ -1,10 +1,11 @@
-import type { Entity, Relationship, BftTable } from "./types.js";
+import type { Entity, Relationship, Manifest, BftTable } from "./types.js";
 import { findConnectedComponents } from "./graph.js";
 
 export interface RowEstimate {
   rows: number;
   reserve_row_count: number;
   total: number;
+  grain_entities: string[];
   breakdown: string[];
 }
 
@@ -64,33 +65,82 @@ export function estimateRows(
     rows: totalRows,
     reserve_row_count: 0,
     total: totalRows,
+    grain_entities: grainEntities,
     breakdown,
   };
 }
 
 /**
- * Estimate rows for a BFT table, including reserve rows.
+ * Derive grain entities for a table from its metrics' propagation paths.
+ * The grain is the union of all entities touched by included metrics.
  */
-export function estimateTableRows(
-  entities: Entity[],
-  relationships: Relationship[],
-  table: BftTable
-): RowEstimate {
-  const base = estimateRows(entities, relationships, table.grain_entities);
+export function deriveGrainEntities(manifest: Manifest, table: BftTable): string[] {
+  const entities = new Set<string>();
 
-  // Count reserve rows: +1 per entity with reserve/elimination-strategy metrics
+  // Build metric owner map
   const metricOwner = new Map<string, string>();
-  for (const entity of entities) {
+  for (const entity of manifest.entities) {
     for (const m of entity.metrics) {
       metricOwner.set(m.name, entity.name);
     }
   }
 
+  // Build propagation lookup
+  const propMap = new Map(manifest.propagations.map((p) => [p.metric, p]));
+
+  for (const metricName of table.metrics) {
+    // Add the metric's home entity
+    const owner = metricOwner.get(metricName);
+    if (owner) entities.add(owner);
+
+    // Add all entities in this metric's propagation path
+    const prop = propMap.get(metricName);
+    if (prop) {
+      for (const edge of prop.path) {
+        entities.add(edge.target_entity);
+      }
+    }
+  }
+
+  return [...entities];
+}
+
+/**
+ * Estimate rows for a BFT table, deriving grain from propagation paths.
+ */
+export function estimateTableRows(manifest: Manifest, table: BftTable): RowEstimate {
+  const grainEntities = deriveGrainEntities(manifest, table);
+  const base = estimateRows(manifest.entities, manifest.relationships, grainEntities);
+
+  // Count reserve rows: entities whose metrics are in this table but have
+  // no propagation path (default = reserve), or have reserve/elimination edges
+  const metricOwner = new Map<string, string>();
+  for (const entity of manifest.entities) {
+    for (const m of entity.metrics) {
+      metricOwner.set(m.name, entity.name);
+    }
+  }
+  const propMap = new Map(manifest.propagations.map((p) => [p.metric, p]));
+
   const reserveEntities = new Set<string>();
-  for (const rm of table.metrics) {
-    if (rm.strategy === "reserve" || rm.strategy === "elimination") {
-      const owner = metricOwner.get(rm.metric);
-      if (owner) reserveEntities.add(owner);
+  for (const metricName of table.metrics) {
+    const owner = metricOwner.get(metricName);
+    if (!owner) continue;
+
+    const prop = propMap.get(metricName);
+    if (!prop) {
+      // No propagation = pure reserve. Needs a reserve row if this entity
+      // is not the only entity in the grain.
+      if (grainEntities.length > 1) {
+        reserveEntities.add(owner);
+      }
+    } else {
+      // Check if any edge uses reserve or elimination
+      for (const edge of prop.path) {
+        if (edge.strategy === "reserve" || edge.strategy === "elimination") {
+          reserveEntities.add(owner);
+        }
+      }
     }
   }
 
@@ -157,7 +207,6 @@ function estimateComponentRows(
   }
 
   if (spanRels.length === 0) {
-    // Shouldn't happen for a component > 1, but just in case
     const entity = entityMap.get(component[0]);
     return entity?.estimated_rows ?? 0;
   }
@@ -171,7 +220,6 @@ function estimateComponentRows(
   // Each additional relationship: multiply by fan-out
   for (let i = 1; i < spanRels.length; i++) {
     const rel = spanRels[i];
-    // The shared entity is the one that connects this rel to the existing tree
     const sharedEntity = findSharedEntity(rel, spanRels.slice(0, i), entityMap);
     if (sharedEntity) {
       const fo = rel.estimated_links / sharedEntity.estimated_rows;
@@ -190,9 +238,6 @@ function findSharedEntity(
   priorRels: Relationship[],
   entityMap: Map<string, Entity>
 ): Entity | undefined {
-  // In a BFS spanning tree, each new edge has exactly one endpoint already
-  // in the tree (the node BFS discovered it from). So exactly one of
-  // rel.between will appear in priorRels — the first match is correct.
   const priorEntities = new Set<string>();
   for (const pr of priorRels) {
     priorEntities.add(pr.between[0]);

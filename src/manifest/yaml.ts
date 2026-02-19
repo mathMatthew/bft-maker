@@ -18,7 +18,7 @@ export function parseManifest(yamlString: string): Manifest {
   return {
     entities: raw.entities ?? [],
     relationships: raw.relationships ?? [],
-    metric_clusters: raw.metric_clusters ?? [],
+    propagations: raw.propagations ?? [],
     bft_tables: raw.bft_tables ?? [],
   };
 }
