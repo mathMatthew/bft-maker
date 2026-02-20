@@ -187,32 +187,41 @@ Two operationally unrelated entities (e.g., Facilities and Admissions) that shar
 
 The shared entity provides explicit join semantics — no naming convention needed. The relationships declare HOW to join. Without them, column alignment would depend on matching column names (fragile).
 
-### 12. Completely Unrelated Entities Are Valid
+### 12. Overlapping Chains Are Still Independent
+
+Two propagation chains can share entities without requiring a cross product. The determining factor is whether any single metric spans both chains' unique entities — not whether the chains overlap.
+
+Example: a university adds Advisors (Student ↔ Advisor, M-M). Salary propagates Professor → Class → Student (chain: {Professor, Class, Student}). Advising_budget propagates Advisor → Student → Class (chain: {Advisor, Student, Class}). These chains overlap on {Student, Class} but neither is a subset of the other.
+
+The correct codegen is UNION ALL, not cross product:
+- Group 1 (117 rows): Professor × Class × Student, Advisor=RESERVE. Salary has allocated values, advising_budget=0.
+- Group 2 (180 rows): Advisor × Student × Class, Professor=RESERVE. Advising_budget has allocated values, salary=0.
+- Total: 297 rows.
+
+SUM-safety holds because each metric's values only appear in its own group. Rolling up to Student × Class works: GROUP BY collapses both groups, each metric's totals come from its group alone.
+
+The cross product (234 rows) would also be SUM-safe, but it creates rows where both salary and advising_budget are 0 — wasted rows with no meaningful data. UNION ALL avoids this.
+
+**Key principle:** chains are independent when no single metric spans both chains' unique entities. Shared intermediate entities don't change this — they appear in both UNION ALL groups serving different purposes in each.
+
+### 13. Completely Unrelated Entities Are Valid
 
 Two entities with no relationship at all can share a table with all-reserve metrics. This is a sparse union — each entity's rows appear independently. Mathematically sound (reserve never produces incorrect sums). Validation may warn but should not block.
+
+**Note:** Finding 12 (overlapping chains) generalizes this: unrelated entities are the extreme case where chains share zero entities. The same UNION ALL logic applies.
 
 ## Current State
 
 **Done:**
 - types.ts updated to new schema (MetricPropagation, PropagationEdge replace MetricCluster, TraversalRule, ResolvedMetric)
 - validate.ts rewritten: propagation path validation (connected paths, no cycles, strategy constraints)
-- estimate.ts rewritten: deriveGrainEntities() computes grain from propagation paths
+- estimate.ts rewritten: deriveGrainEntities() computes grain from propagation paths; independent chains detected and summed (UNION ALL) instead of cross-producted
 - yaml.ts updated for new schema
-- 38 tests passing against new schema
-- Reference manifests: university (synthetic data + manifest) and northwind (manifest for existing data)
-- Branch: `feat/reference-manifests` (2 commits, not yet PR'd)
+- 49 tests passing against new schema
+- Reference manifests: university (multi-hop allocation, elimination, sum_over_sum), northwind (allocation by quantity, sum_over_sum for price), university-ops (shared dimension, independent chains)
+- spec.md and system-design.md updated to match new schema
 - All open questions resolved
+- PR #2 open for review
 
 **Not done:**
-- estimateRows needs to detect all-reserve entity pairs and add rather than multiply
-- Test manifests for shared-dimension and unrelated-entity cases
-- spec.md and system-design.md not yet updated to reflect new schema
 - P2 (codegen) blocked until schema stabilizes
-
-## Next Steps
-
-1. Fix estimateRows to handle all-reserve pairs (add, don't multiply)
-2. Build test manifests: shared dimension (Month), unrelated entities (pure reserve), shared dimension with propagation
-3. Update spec.md and system-design.md
-4. PR the schema changes
-5. Then proceed to P2 (codegen)

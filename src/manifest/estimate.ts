@@ -70,30 +70,42 @@ export function estimateRows(
   };
 }
 
+function buildMetricOwnerMap(manifest: Manifest): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const entity of manifest.entities) {
+    for (const m of entity.metrics) {
+      map.set(m.name, entity.name);
+    }
+  }
+  return map;
+}
+
+function buildPropMap(manifest: Manifest): Map<string, typeof manifest.propagations[number]> {
+  return new Map(manifest.propagations.map((p) => [p.metric, p]));
+}
+
 /**
  * Derive grain entities for a table from its metrics' propagation paths.
  * The grain is the union of all entities touched by included metrics.
  */
 export function deriveGrainEntities(manifest: Manifest, table: BftTable): string[] {
+  return deriveGrainEntitiesInner(
+    manifest, table, buildMetricOwnerMap(manifest), buildPropMap(manifest)
+  );
+}
+
+function deriveGrainEntitiesInner(
+  manifest: Manifest,
+  table: BftTable,
+  metricOwner: Map<string, string>,
+  propMap: Map<string, typeof manifest.propagations[number]>
+): string[] {
   const entities = new Set<string>();
 
-  // Build metric owner map
-  const metricOwner = new Map<string, string>();
-  for (const entity of manifest.entities) {
-    for (const m of entity.metrics) {
-      metricOwner.set(m.name, entity.name);
-    }
-  }
-
-  // Build propagation lookup
-  const propMap = new Map(manifest.propagations.map((p) => [p.metric, p]));
-
   for (const metricName of table.metrics) {
-    // Add the metric's home entity
     const owner = metricOwner.get(metricName);
     if (owner) entities.add(owner);
 
-    // Add all entities in this metric's propagation path
     const prop = propMap.get(metricName);
     if (prop) {
       for (const edge of prop.path) {
@@ -113,15 +125,9 @@ export function deriveGrainEntities(manifest: Manifest, table: BftTable): string
  * reflects this: independent chains contribute additive row counts.
  */
 export function estimateTableRows(manifest: Manifest, table: BftTable): RowEstimate {
-  const grainEntities = deriveGrainEntities(manifest, table);
-
-  const metricOwner = new Map<string, string>();
-  for (const entity of manifest.entities) {
-    for (const m of entity.metrics) {
-      metricOwner.set(m.name, entity.name);
-    }
-  }
-  const propMap = new Map(manifest.propagations.map((p) => [p.metric, p]));
+  const metricOwner = buildMetricOwnerMap(manifest);
+  const propMap = buildPropMap(manifest);
+  const grainEntities = deriveGrainEntitiesInner(manifest, table, metricOwner, propMap);
 
   // Compute each metric's entity chain: home entity + propagation targets
   const chains: Set<string>[] = [];
@@ -153,7 +159,13 @@ export function estimateTableRows(manifest: Manifest, table: BftTable): RowEstim
     );
   }
 
-  // Count reserve rows: entities whose metrics are pure reserve or use elimination
+  // Count reserve rows. A reserve row is tagged with the metric's home entity
+  // (e.g., <Reserve Class>) — it holds the correction value for that entity's
+  // metric. For elimination: class_budget (Class) eliminated toward Student
+  // means every Student row shows the full budget. The <Reserve Class> row
+  // subtracts N-1 copies so SUM still equals the true total. For pure reserve:
+  // salary (Professor) with no propagation means salary=0 on all regular rows
+  // and the <Reserve Professor> row holds the full salary total.
   const reserveEntities = new Set<string>();
   for (const metricName of table.metrics) {
     const owner = metricOwner.get(metricName);
@@ -161,6 +173,8 @@ export function estimateTableRows(manifest: Manifest, table: BftTable): RowEstim
 
     const prop = propMap.get(metricName);
     if (!prop) {
+      // No propagation = pure reserve. Needs a reserve row if there are
+      // foreign entities (single-entity tables don't need reserve rows).
       if (grainEntities.length > 1) {
         reserveEntities.add(owner);
       }

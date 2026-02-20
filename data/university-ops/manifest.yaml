@@ -80,14 +80,11 @@ bft_tables:
   # Building and Program are all-reserve for each other — no cross product.
   - name: monthly_operations
     metrics: [maintenance_cost, applications_received, acceptance_rate]
-    estimated_rows: 96
 
   # Facilities-only view: just Building × Month
   - name: facilities_monthly
     metrics: [maintenance_cost]
-    estimated_rows: 60
 
   # Admissions-only view: just Program × Month
   - name: admissions_monthly
     metrics: [applications_received, acceptance_rate]
-    estimated_rows: 36

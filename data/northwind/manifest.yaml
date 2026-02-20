@@ -53,4 +53,3 @@ propagations:
 bft_tables:
   - name: order_product
     metrics: [freight, unit_price, units_in_stock]
-    estimated_rows: 2155

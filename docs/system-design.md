@@ -76,7 +76,7 @@ The manifest is a plain object conforming to `types.ts`. It can be written by ha
 The manifest is the contract. Everything downstream is mechanical. The TypeScript interfaces in `types.ts` are the source of truth; YAML serialization is just for human readability and version control.
 
 ```typescript
-type Strategy = "reserve" | "elimination" | "allocation" | "sum_over_sum" | "direct";
+type Strategy = "reserve" | "elimination" | "allocation" | "sum_over_sum";
 
 interface Manifest {
   entities: Entity[];
@@ -135,7 +135,6 @@ interface PropagationEdge {
 interface BftTable {
   name: string;
   metrics: string[];             // which metrics to include
-  estimated_rows?: number;       // optional manual override
 }
 ```
 

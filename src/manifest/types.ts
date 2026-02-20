@@ -2,8 +2,7 @@ export type Strategy =
   | "reserve"
   | "elimination"
   | "allocation"
-  | "sum_over_sum"
-  | "direct";
+  | "sum_over_sum";
 
 export interface MetricDef {
   name: string;
@@ -55,7 +54,6 @@ export interface MetricPropagation {
 export interface BftTable {
   name: string;
   metrics: string[];
-  estimated_rows?: number;
 }
 
 export interface Manifest {

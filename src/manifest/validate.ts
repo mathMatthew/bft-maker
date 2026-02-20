@@ -76,6 +76,12 @@ function checkDuplicateNames(
   );
 
   checkDuplicates(
+    manifest.propagations.map((p) => p.metric),
+    "propagation",
+    errors
+  );
+
+  checkDuplicates(
     manifest.bft_tables.map((t) => t.name),
     "table",
     errors
@@ -237,7 +243,7 @@ function checkPropagations(
       if (def && def.nature === "non-additive" && invalidStrategies.has(edge.strategy)) {
         errors.push({
           rule: "non-additive-strategy",
-          message: `Non-additive metric "${prop.metric}" cannot use "${edge.strategy}" strategy — must use "sum_over_sum" or "direct"`,
+          message: `Non-additive metric "${prop.metric}" cannot use "${edge.strategy}" strategy — must use "sum_over_sum"`,
           path: `propagations.${prop.metric}.path[${i}]`,
         });
       }

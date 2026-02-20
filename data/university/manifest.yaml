@@ -84,11 +84,9 @@ bft_tables:
   # because its path doesn't reach Professor.
   - name: department_financial
     metrics: [tuition_paid, class_budget, salary]
-    estimated_rows: 117
 
-  # Narrower grain: Student × Class only
-  # Includes tuition (direct — Student is home), satisfaction (sum_over_sum),
-  # class_budget (eliminated toward students).
+  # Grain: Student × Class × Professor (tuition_paid propagates to Professor)
+  # Includes tuition (allocated through both hops), satisfaction (sum_over_sum
+  # to Class, reserve for Professor), class_budget (eliminated toward students).
   - name: student_advising
     metrics: [tuition_paid, satisfaction_score, class_budget]
-    estimated_rows: 90

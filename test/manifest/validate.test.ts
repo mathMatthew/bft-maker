@@ -163,6 +163,16 @@ describe("validate", () => {
   });
 
   describe("propagation paths", () => {
+    it("catches duplicate propagation for same metric", () => {
+      const m = validManifest();
+      m.propagations.push({
+        metric: "tuition_paid",
+        path: [{ relationship: "Enrollment", target_entity: "Class", strategy: "allocation" }],
+      });
+      const errors = validate(m);
+      assert.ok(errors.some((e) => e.rule === "no-duplicates" && e.message.includes("tuition_paid")));
+    });
+
     it("catches nonexistent metric in propagation", () => {
       const m = validManifest();
       m.propagations.push({ metric: "ghost_metric", path: [] });
