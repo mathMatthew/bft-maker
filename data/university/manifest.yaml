@@ -88,5 +88,5 @@ bft_tables:
   # Grain: Student × Class × Professor (tuition_paid propagates to Professor)
   # Includes tuition (allocated through both hops), satisfaction (sum_over_sum
   # to Class, reserve for Professor), class_budget (eliminated toward students).
-  - name: student_advising
+  - name: student_experience
     metrics: [tuition_paid, satisfaction_score, class_budget]

@@ -4,6 +4,10 @@ export type Strategy =
   | "allocation"
   | "sum_over_sum";
 
+export const VALID_STRATEGIES: ReadonlySet<string> = new Set([
+  "reserve", "elimination", "allocation", "sum_over_sum",
+]);
+
 export interface MetricDef {
   name: string;
   type: "currency" | "integer" | "float" | "rating" | "percentage";

@@ -251,7 +251,7 @@ Table: department_financial
   Grain: Student × Class × Professor
   Estimated rows: ~180,000 + reserve rows
 
-Table: student_advising
+Table: student_experience
   Metrics: tuition_paid, satisfaction_score, class_budget
   All chains within {Student, Class}
   Grain: Student × Class
@@ -323,7 +323,7 @@ bft_tables:
     # Derived grain: Student × Class × Professor
     # Estimated rows: ~180,000
 
-  - name: student_advising
+  - name: student_experience
     metrics: [tuition_paid, satisfaction_score, class_budget]
     # Derived grain: Student × Class
     # Estimated rows: ~120,000

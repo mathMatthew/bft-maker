@@ -80,7 +80,7 @@ function validManifest(): Manifest {
         metrics: ["tuition_paid", "class_budget", "salary"],
       },
       {
-        name: "student_advising",
+        name: "student_experience",
         metrics: ["tuition_paid", "satisfaction_score", "class_budget"],
       },
     ],
@@ -247,6 +247,48 @@ describe("validate", () => {
       const errors = validate(m);
       const sErrors = errors.filter((e) => e.rule === "non-additive-strategy" && e.message.includes("satisfaction_score"));
       assert.deepStrictEqual(sErrors, []);
+    });
+
+    it("allows reserve on non-additive metric", () => {
+      const m = validManifest();
+      m.propagations = m.propagations.filter((p) => p.metric !== "satisfaction_score");
+      m.propagations.push({
+        metric: "satisfaction_score",
+        path: [{ relationship: "Enrollment", target_entity: "Class", strategy: "reserve" }],
+      });
+      const errors = validate(m);
+      const sErrors = errors.filter((e) => e.rule === "non-additive-strategy" && e.message.includes("satisfaction_score"));
+      assert.deepStrictEqual(sErrors, []);
+    });
+
+    it("catches invalid strategy value", () => {
+      const m = validManifest();
+      m.propagations.push({
+        metric: "salary",
+        path: [{ relationship: "Assignment", target_entity: "Class", strategy: "spread" as any }],
+      });
+      const errors = validate(m);
+      assert.ok(errors.some((e) => e.rule === "valid-strategy" && e.message.includes("spread")));
+    });
+
+    it("catches missing weight on allocation strategy", () => {
+      const m = validManifest();
+      m.propagations.push({
+        metric: "salary",
+        path: [{ relationship: "Assignment", target_entity: "Class", strategy: "allocation" }],
+      });
+      const errors = validate(m);
+      assert.ok(errors.some((e) => e.rule === "strategy-weight-required" && e.message.includes("salary")));
+    });
+
+    it("catches missing weight on sum_over_sum strategy", () => {
+      const m = validManifest();
+      m.propagations.push({
+        metric: "salary",
+        path: [{ relationship: "Assignment", target_entity: "Class", strategy: "sum_over_sum" }],
+      });
+      const errors = validate(m);
+      assert.ok(errors.some((e) => e.rule === "strategy-weight-required" && e.message.includes("salary")));
     });
   });
 

@@ -1,5 +1,6 @@
 import type { Entity, Relationship, Manifest, BftTable } from "./types.js";
 import { findConnectedComponents } from "./graph.js";
+import { buildMetricOwnerMap } from "./helpers.js";
 
 export interface RowEstimate {
   rows: number;
@@ -70,16 +71,6 @@ export function estimateRows(
   };
 }
 
-function buildMetricOwnerMap(manifest: Manifest): Map<string, string> {
-  const map = new Map<string, string>();
-  for (const entity of manifest.entities) {
-    for (const m of entity.metrics) {
-      map.set(m.name, entity.name);
-    }
-  }
-  return map;
-}
-
 function buildPropMap(manifest: Manifest): Map<string, typeof manifest.propagations[number]> {
   return new Map(manifest.propagations.map((p) => [p.metric, p]));
 }
@@ -90,21 +81,21 @@ function buildPropMap(manifest: Manifest): Map<string, typeof manifest.propagati
  */
 export function deriveGrainEntities(manifest: Manifest, table: BftTable): string[] {
   return deriveGrainEntitiesInner(
-    manifest, table, buildMetricOwnerMap(manifest), buildPropMap(manifest)
+    manifest, table, buildMetricOwnerMap(manifest.entities), buildPropMap(manifest)
   );
 }
 
 function deriveGrainEntitiesInner(
   manifest: Manifest,
   table: BftTable,
-  metricOwner: Map<string, string>,
+  metricOwner: Map<string, Entity>,
   propMap: Map<string, typeof manifest.propagations[number]>
 ): string[] {
   const entities = new Set<string>();
 
   for (const metricName of table.metrics) {
     const owner = metricOwner.get(metricName);
-    if (owner) entities.add(owner);
+    if (owner) entities.add(owner.name);
 
     const prop = propMap.get(metricName);
     if (prop) {
@@ -125,7 +116,7 @@ function deriveGrainEntitiesInner(
  * reflects this: independent chains contribute additive row counts.
  */
 export function estimateTableRows(manifest: Manifest, table: BftTable): RowEstimate {
-  const metricOwner = buildMetricOwnerMap(manifest);
+  const metricOwner = buildMetricOwnerMap(manifest.entities);
   const propMap = buildPropMap(manifest);
   const grainEntities = deriveGrainEntitiesInner(manifest, table, metricOwner, propMap);
 
@@ -134,7 +125,7 @@ export function estimateTableRows(manifest: Manifest, table: BftTable): RowEstim
   for (const metricName of table.metrics) {
     const owner = metricOwner.get(metricName);
     if (!owner) continue;
-    const chain = new Set<string>([owner]);
+    const chain = new Set<string>([owner.name]);
     const prop = propMap.get(metricName);
     if (prop) {
       for (const edge of prop.path) chain.add(edge.target_entity);
@@ -176,12 +167,12 @@ export function estimateTableRows(manifest: Manifest, table: BftTable): RowEstim
       // No propagation = pure reserve. Needs a reserve row if there are
       // foreign entities (single-entity tables don't need reserve rows).
       if (grainEntities.length > 1) {
-        reserveEntities.add(owner);
+        reserveEntities.add(owner.name);
       }
     } else {
       for (const edge of prop.path) {
         if (edge.strategy === "reserve" || edge.strategy === "elimination") {
-          reserveEntities.add(owner);
+          reserveEntities.add(owner.name);
         }
       }
     }
@@ -283,6 +274,7 @@ function estimateComponentRows(
   }
 
   if (spanRels.length === 0) {
+    // Shouldn't happen for a component > 1, but defensive fallback
     const entity = entityMap.get(component[0]);
     return entity?.estimated_rows ?? 0;
   }
@@ -293,7 +285,8 @@ function estimateComponentRows(
     `${spanRels[0].name}: ${spanRels[0].estimated_links} links (base)`
   );
 
-  // Each additional relationship: multiply by fan-out
+  // Each additional relationship: multiply by fan-out.
+  // The shared entity is the one that connects this rel to the existing tree.
   for (let i = 1; i < spanRels.length; i++) {
     const rel = spanRels[i];
     const sharedEntity = findSharedEntity(rel, spanRels.slice(0, i), entityMap);
@@ -309,6 +302,9 @@ function estimateComponentRows(
   return result;
 }
 
+// In a BFS spanning tree, each new edge has exactly one endpoint already
+// in the tree (the node BFS discovered it from). So exactly one of
+// rel.between will appear in priorRels — the first match is correct.
 function findSharedEntity(
   rel: Relationship,
   priorRels: Relationship[],

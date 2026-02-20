@@ -8,6 +8,7 @@ export type {
   BftTable,
   Strategy,
 } from "./types.js";
+export { VALID_STRATEGIES } from "./types.js";
 
 export { validate } from "./validate.js";
 export type { ValidationError } from "./validate.js";

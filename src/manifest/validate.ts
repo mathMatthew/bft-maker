@@ -1,4 +1,6 @@
-import type { Manifest, Entity, MetricDef } from "./types.js";
+import type { Manifest, Entity } from "./types.js";
+import { VALID_STRATEGIES } from "./types.js";
+import { buildMetricOwnerMap, findMetricDef } from "./helpers.js";
 
 export interface ValidationError {
   rule: string;
@@ -28,27 +30,6 @@ function buildEntityMap(entities: Entity[]): Map<string, Entity> {
   return new Map(entities.map((e) => [e.name, e]));
 }
 
-function buildMetricOwnerMap(entities: Entity[]): Map<string, Entity> {
-  const map = new Map<string, Entity>();
-  for (const entity of entities) {
-    for (const metric of entity.metrics) {
-      map.set(metric.name, entity);
-    }
-  }
-  return map;
-}
-
-function findMetricDef(
-  entities: Entity[],
-  metricName: string
-): MetricDef | undefined {
-  for (const entity of entities) {
-    for (const metric of entity.metrics) {
-      if (metric.name === metricName) return metric;
-    }
-  }
-  return undefined;
-}
 
 // Rule: No duplicate entity names, metric names, relationship names, or table names
 function checkDuplicateNames(
@@ -172,7 +153,7 @@ function checkPropagations(
   errors: ValidationError[]
 ): void {
   const relMap = new Map(manifest.relationships.map((r) => [r.name, r]));
-  const invalidStrategies = new Set(["allocation", "elimination", "reserve"]);
+  const nonAdditiveInvalid = new Set(["allocation", "elimination"]);
 
   for (const prop of manifest.propagations) {
     const owner = metricOwner.get(prop.metric);
@@ -229,6 +210,24 @@ function checkPropagations(
         }
       }
 
+      // Check strategy is a valid enum value
+      if (!VALID_STRATEGIES.has(edge.strategy)) {
+        errors.push({
+          rule: "valid-strategy",
+          message: `Propagation for "${prop.metric}" has invalid strategy "${edge.strategy}" — must be one of: reserve, elimination, allocation, sum_over_sum`,
+          path: `propagations.${prop.metric}.path[${i}]`,
+        });
+      }
+
+      // Check weight is provided for strategies that require it
+      if ((edge.strategy === "allocation" || edge.strategy === "sum_over_sum") && !edge.weight) {
+        errors.push({
+          rule: "strategy-weight-required",
+          message: `Propagation for "${prop.metric}": strategy "${edge.strategy}" requires a weight`,
+          path: `propagations.${prop.metric}.path[${i}]`,
+        });
+      }
+
       // Check for cycles (tree constraint)
       if (visited.has(edge.target_entity)) {
         errors.push({
@@ -240,10 +239,10 @@ function checkPropagations(
       visited.add(edge.target_entity);
 
       // Check non-additive strategy constraint
-      if (def && def.nature === "non-additive" && invalidStrategies.has(edge.strategy)) {
+      if (def && def.nature === "non-additive" && nonAdditiveInvalid.has(edge.strategy)) {
         errors.push({
           rule: "non-additive-strategy",
-          message: `Non-additive metric "${prop.metric}" cannot use "${edge.strategy}" strategy — must use "sum_over_sum"`,
+          message: `Non-additive metric "${prop.metric}" cannot use "${edge.strategy}" strategy — must use "sum_over_sum" or "reserve"`,
           path: `propagations.${prop.metric}.path[${i}]`,
         });
       }
