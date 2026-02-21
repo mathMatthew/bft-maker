@@ -181,7 +181,7 @@ The user upgrades metrics away from reserve one at a time:
 >
 > If distributed: *"Tuition can be allocated through Enrollment to Class, then through Assignment to Professor. Should each hop use the relationship's weight, or equal split?"*
 
-Each answer defines a **propagation path** — an ordered sequence of hops from the metric's home entity outward through relationships.
+Each answer defines a **propagation path** — an ordered sequence of hops from the metric's home entity outward through relationships. The dialogue above would produce the first propagation below: tuition allocated Student → Class → Professor.
 
 ```yaml
 propagations:

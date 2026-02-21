@@ -1,4 +1,4 @@
-import type { Entity, Relationship, Manifest, BftTable } from "./types.js";
+import type { Entity, Relationship, Manifest, MetricPropagation, BftTable } from "./types.js";
 import { findConnectedComponents } from "./graph.js";
 import { buildMetricOwnerMap } from "./helpers.js";
 
@@ -71,7 +71,7 @@ export function estimateRows(
   };
 }
 
-function buildPropMap(manifest: Manifest): Map<string, typeof manifest.propagations[number]> {
+function buildPropMap(manifest: Manifest): Map<string, MetricPropagation> {
   return new Map(manifest.propagations.map((p) => [p.metric, p]));
 }
 
@@ -89,7 +89,7 @@ function deriveGrainEntitiesInner(
   manifest: Manifest,
   table: BftTable,
   metricOwner: Map<string, Entity>,
-  propMap: Map<string, typeof manifest.propagations[number]>
+  propMap: Map<string, MetricPropagation>
 ): string[] {
   const entities = new Set<string>();
 

@@ -192,6 +192,7 @@ function checkPropagations(
           message: `Propagation for "${prop.metric}" references nonexistent relationship "${edge.relationship}"`,
           path: `propagations.${prop.metric}.path[${i}]`,
         });
+        currentEntity = edge.target_entity;
         continue;
       }
 
@@ -202,6 +203,7 @@ function checkPropagations(
           message: `Propagation for "${prop.metric}" references nonexistent target entity "${edge.target_entity}"`,
           path: `propagations.${prop.metric}.path[${i}]`,
         });
+        currentEntity = edge.target_entity;
         continue;
       }
 
@@ -262,7 +264,8 @@ function checkPropagations(
   }
 }
 
-// Rule: All metric names referenced in tables must exist on some entity
+// Rule: All metric names referenced in tables must exist on some entity.
+// Note: empty metrics list is valid — a table may exist for dimensions/joins only.
 function checkTableMetrics(
   manifest: Manifest,
   metricOwner: Map<string, Entity>,
