@@ -210,18 +210,34 @@ Two entities with no relationship at all can share a table with all-reserve metr
 
 **Note:** Finding 12 (overlapping chains) generalizes this: unrelated entities are the extreme case where chains share zero entities. The same UNION ALL logic applies.
 
+## Open Questions
+
+### 14. Do Intermediate Entities Belong in the Grain?
+
+Currently, `deriveGrainEntities` puts every entity in a metric's propagation path into the grain. If A's metric propagates A → B → C → D, the grain includes {A, B, C, D}. You can't get an A × D table — B and C are forced in.
+
+But B and C might only be *routing* — the codegen joins through them to compute allocation weights, but the user doesn't want B and C as row dimensions in the output. The codegen could join A-B-C-D, compute the allocation, then GROUP BY (A, D), collapsing B and C out of the result.
+
+This means the propagation path might describe the *calculation route* (which relationships to join for weight computation) separately from the *grain* (which entities get their own rows). If so, the grain would be a table-level decision, not automatically derived from propagation paths.
+
+**Related question: reserve edges in propagation paths.** A reserve edge (e.g., A → B with strategy "reserve") currently forces B into the grain. If B is already in the grain from its own metric, the reserve edge is redundant — B gets reserve treatment by default. If B isn't otherwise in the grain, the reserve edge's only effect is forcing B in. Whether that's useful or a design smell depends on whether intermediate entities should be in the grain at all.
+
+**Resolution:** defer to codegen. When we write the SQL for multi-hop allocation, it will become clear whether intermediate entities must be grain dimensions or whether they can be collapsed. Build simple test data (e.g., 4-entity chain with known values), write the SQL both ways, and compare results.
+
 ## Current State
 
 **Done:**
 - types.ts updated to new schema (MetricPropagation, PropagationEdge replace MetricCluster, TraversalRule, ResolvedMetric)
-- validate.ts rewritten: propagation path validation (connected paths, no cycles, strategy constraints)
+- validate.ts rewritten: propagation path validation (connected paths, no cycles, strategy constraints, empty path, duplicate table metrics)
 - estimate.ts rewritten: deriveGrainEntities() computes grain from propagation paths; independent chains detected and summed (UNION ALL) instead of cross-producted
 - yaml.ts updated for new schema
-- 49 tests passing against new schema
+- 55 tests passing against new schema
 - Reference manifests: university (multi-hop allocation, elimination, sum_over_sum), northwind (allocation by quantity, sum_over_sum for price), university-ops (shared dimension, independent chains)
 - spec.md and system-design.md updated to match new schema
-- All open questions resolved
 - PR #2 open for review
+
+**Open:**
+- Finding 14: do intermediate propagation entities belong in the grain? (deferred to codegen)
 
 **Not done:**
 - P2 (codegen) blocked until schema stabilizes

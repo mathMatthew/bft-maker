@@ -71,11 +71,15 @@ describe("estimateRows", () => {
   });
 
   it("single M-M bridge returns estimated_links", () => {
+    // Student × Class via Enrollment
     const result = estimateRows(entities, relationships, ["Student", "Class"]);
     assert.equal(result.rows, 120000);
   });
 
   it("two M-M bridges sharing a bridge entity", () => {
+    // Student × Class × Professor
+    // = Enrollment links × (Assignment links / Class rows)
+    // = 120,000 × (1,800 / 1,200) = 180,000
     const result = estimateRows(entities, relationships, [
       "Student", "Class", "Professor",
     ]);
@@ -83,6 +87,7 @@ describe("estimateRows", () => {
   });
 
   it("unrelated entities sum their rows", () => {
+    // Student and Professor with no connecting relationship
     const result = estimateRows(entities, [], ["Student", "Professor"]);
     assert.equal(result.rows, 45000 + 800);
   });
@@ -106,6 +111,7 @@ describe("estimateRows", () => {
       [mtoRel],
       ["Student", "Department"]
     );
+    // M-to-1 doesn't create M-M expansion, treated as sparse union
     assert.equal(result.rows, 45000 + 50);
   });
 
@@ -398,10 +404,12 @@ describe("estimateTableRows — reference manifests", () => {
 
 describe("fanOut", () => {
   it("computes fan-out for Enrollment", () => {
+    // 120,000 links / 1,200 classes = 100 students per class
     assert.equal(fanOut(enrollment, classEntity), 100);
   });
 
   it("computes fan-out for Assignment", () => {
+    // 1,800 links / 1,200 classes = 1.5 professors per class
     assert.equal(fanOut(assignment, classEntity), 1.5);
   });
 });

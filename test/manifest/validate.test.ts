@@ -175,9 +175,16 @@ describe("validate", () => {
 
     it("catches nonexistent metric in propagation", () => {
       const m = validManifest();
-      m.propagations.push({ metric: "ghost_metric", path: [] });
+      m.propagations.push({ metric: "ghost_metric", path: [{ relationship: "Enrollment", target_entity: "Class", strategy: "allocation" }] });
       const errors = validate(m);
       assert.ok(errors.some((e) => e.rule === "propagation-metric-exists" && e.message.includes("ghost_metric")));
+    });
+
+    it("catches empty propagation path", () => {
+      const m = validManifest();
+      m.propagations.push({ metric: "salary", path: [] });
+      const errors = validate(m);
+      assert.ok(errors.some((e) => e.rule === "propagation-path-nonempty" && e.message.includes("salary")));
     });
 
     it("catches nonexistent relationship in propagation path", () => {
@@ -298,6 +305,13 @@ describe("validate", () => {
       m.bft_tables[0].metrics.push("nonexistent_metric");
       const errors = validate(m);
       assert.ok(errors.some((e) => e.rule === "table-metric-exists" && e.message.includes("nonexistent_metric")));
+    });
+
+    it("catches duplicate metric in table", () => {
+      const m = validManifest();
+      m.bft_tables[0].metrics.push("tuition_paid");
+      const errors = validate(m);
+      assert.ok(errors.some((e) => e.rule === "table-metric-unique" && e.message.includes("tuition_paid")));
     });
   });
 

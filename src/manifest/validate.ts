@@ -30,7 +30,6 @@ function buildEntityMap(entities: Entity[]): Map<string, Entity> {
   return new Map(entities.map((e) => [e.name, e]));
 }
 
-
 // Rule: No duplicate entity names, metric names, relationship names, or table names
 function checkDuplicateNames(
   manifest: Manifest,
@@ -166,6 +165,17 @@ function checkPropagations(
       continue;
     }
 
+    // Empty path is a no-op — if the metric should be reserve, omit the
+    // propagation entirely rather than declaring an empty one.
+    if (prop.path.length === 0) {
+      errors.push({
+        rule: "propagation-path-nonempty",
+        message: `Propagation for "${prop.metric}" has an empty path — omit the propagation to use reserve`,
+        path: `propagations.${prop.metric}`,
+      });
+      continue;
+    }
+
     const def = findMetricDef(manifest.entities, prop.metric);
 
     // Walk the path and validate each edge
@@ -259,7 +269,17 @@ function checkTableMetrics(
   errors: ValidationError[]
 ): void {
   for (const table of manifest.bft_tables) {
+    const seen = new Set<string>();
     for (const metricName of table.metrics) {
+      if (seen.has(metricName)) {
+        errors.push({
+          rule: "table-metric-unique",
+          message: `Table "${table.name}" lists metric "${metricName}" more than once`,
+          path: `bft_tables.${table.name}.metrics`,
+        });
+      }
+      seen.add(metricName);
+
       if (!metricOwner.has(metricName)) {
         errors.push({
           rule: "table-metric-exists",
