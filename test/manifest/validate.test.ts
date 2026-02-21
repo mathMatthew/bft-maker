@@ -81,7 +81,7 @@ function validManifest(): Manifest {
       },
       {
         name: "student_experience",
-        metrics: ["tuition_paid", "satisfaction_score", "class_budget"],
+        metrics: ["satisfaction_score", "class_budget"],
       },
     ],
   };
