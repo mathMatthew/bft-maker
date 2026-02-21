@@ -4,9 +4,8 @@ import { buildMetricOwnerMap } from "./helpers.js";
 
 export interface RowEstimate {
   rows: number;
-  reserve_row_count: number;
+  correction_row_count: number;
   total: number;
-  grain_entities: string[];
   breakdown: string[];
 }
 
@@ -19,7 +18,7 @@ export interface RowEstimate {
  * - Two M-M bridges sharing a bridge entity: links1 * (links2 / bridge.estimated_rows)
  * - Each additional M-M bridge: multiply by fan-out
  * - Unrelated entities with detail: sum of row counts (sparse union)
- * - Reserve rows: +1 per entity with reserve-strategy metrics
+ * - Correction rows: entity.estimated_rows per entity needing corrections
  */
 export function estimateRows(
   entities: Entity[],
@@ -64,76 +63,77 @@ export function estimateRows(
 
   return {
     rows: totalRows,
-    reserve_row_count: 0,
+    correction_row_count: 0,
     total: totalRows,
-    grain_entities: grainEntities,
     breakdown,
   };
 }
 
-function buildPropMap(manifest: Manifest): Map<string, MetricPropagation> {
-  return new Map(manifest.propagations.map((p) => [p.metric, p]));
-}
-
 /**
- * Derive grain entities for a table from its metrics' propagation paths.
- * The grain is the union of all entities touched by included metrics.
- */
-export function deriveGrainEntities(manifest: Manifest, table: BftTable): string[] {
-  return deriveGrainEntitiesInner(
-    manifest, table, buildMetricOwnerMap(manifest.entities), buildPropMap(manifest)
-  );
-}
-
-function deriveGrainEntitiesInner(
-  manifest: Manifest,
-  table: BftTable,
-  metricOwner: Map<string, Entity>,
-  propMap: Map<string, MetricPropagation>
-): string[] {
-  const entities = new Set<string>();
-
-  for (const metricName of table.metrics) {
-    const owner = metricOwner.get(metricName);
-    if (owner) entities.add(owner.name);
-
-    const prop = propMap.get(metricName);
-    if (prop) {
-      for (const edge of prop.path) {
-        entities.add(edge.target_entity);
-      }
-    }
-  }
-
-  return [...entities];
-}
-
-/**
- * Estimate rows for a BFT table, deriving grain from propagation paths.
+ * Estimate rows for a BFT table. The table declares its grain entities
+ * explicitly — no derivation from propagation paths.
  *
- * When metrics have independent propagation chains (no single metric spans
- * both), the codegen emits UNION ALL — not a cross product. The estimation
- * reflects this: independent chains contribute additive row counts.
+ * When metrics have independent entity groups (no single metric spans
+ * both), the codegen emits UNION ALL — not a cross product. Each metric's
+ * "active entities" = home entity + propagation targets that are in the
+ * grain. Independent groups are estimated separately and summed.
+ *
+ * Correction rows make SUMs correct for reserve and elimination strategies.
+ * There is one correction row per entity VALUE (not per entity), so the
+ * count is entity.estimated_rows for each entity needing corrections.
  */
 export function estimateTableRows(manifest: Manifest, table: BftTable): RowEstimate {
   const metricOwner = buildMetricOwnerMap(manifest.entities);
-  const propMap = buildPropMap(manifest);
-  const grainEntities = deriveGrainEntitiesInner(manifest, table, metricOwner, propMap);
+  const propMap = new Map(manifest.propagations.map((p) => [p.metric, p]));
+  const entityMap = new Map(manifest.entities.map((e) => [e.name, e]));
+  const grainEntities = table.entities;
+  const grainSet = new Set(grainEntities);
 
-  // Compute each metric's entity chain: home entity + propagation targets
+  // Compute each metric's active entities in this table:
+  // home entity + propagation targets that are in the grain.
   const chains: Set<string>[] = [];
   for (const metricName of table.metrics) {
     const owner = metricOwner.get(metricName);
-    if (!owner) continue;
+    if (!owner || !grainSet.has(owner.name)) continue;
     const chain = new Set<string>([owner.name]);
     const prop = propMap.get(metricName);
     if (prop) {
-      for (const edge of prop.path) chain.add(edge.target_entity);
+      for (const edge of prop.path) {
+        if (grainSet.has(edge.target_entity)) chain.add(edge.target_entity);
+      }
     }
     chains.push(chain);
   }
 
-  // Remove duplicate and subset chains — subsets ride along on larger chains
+  // Add any grain entities not covered by metrics (pure dimension entities)
+  const coveredEntities = new Set<string>();
+  for (const chain of chains) {
+    for (const e of chain) coveredEntities.add(e);
+  }
+  for (const entityName of grainEntities) {
+    if (!coveredEntities.has(entityName)) {
+      // Merge into whichever chain connects to it, or create a singleton
+      let merged = false;
+      for (const chain of chains) {
+        // Check if any M-M relationship connects this entity to the chain
+        for (const rel of manifest.relationships) {
+          if (rel.type !== "many-to-many") continue;
+          const [a, b] = rel.between;
+          if ((a === entityName && chain.has(b)) || (b === entityName && chain.has(a))) {
+            chain.add(entityName);
+            merged = true;
+            break;
+          }
+        }
+        if (merged) break;
+      }
+      if (!merged) {
+        chains.push(new Set([entityName]));
+      }
+    }
+  }
+
+  // Remove duplicate and subset chains
   const effectiveChains = removeSubsetChains(chains);
 
   // Estimate each chain independently and sum (UNION ALL)
@@ -150,54 +150,68 @@ export function estimateTableRows(manifest: Manifest, table: BftTable): RowEstim
     );
   }
 
-  // Count reserve rows. A reserve row is tagged with the metric's home entity
-  // (e.g., <Reserve Class>) — it holds the correction value for that entity's
-  // metric. For elimination: class_budget (Class) eliminated toward Student
-  // means every Student row shows the full budget. The <Reserve Class> row
-  // subtracts N-1 copies so SUM still equals the true total. For pure reserve:
-  // salary (Professor) with no propagation means salary=0 on all regular rows
-  // and the <Reserve Professor> row holds the full salary total.
-  const reserveEntities = new Set<string>();
+  // Count correction rows. One correction row per entity VALUE for each
+  // entity that has reserve or elimination metrics in this table.
+  //
+  // Reserve: salary (Professor) with no propagation means salary=0 on all
+  // regular rows. Each professor gets a correction row holding their salary.
+  //
+  // Elimination: class_budget (Class) eliminated toward Student means every
+  // Student row shows the full budget. Each class gets a correction row
+  // subtracting the overcount so SUM equals the true total.
+  const correctionEntities = new Set<string>();
   for (const metricName of table.metrics) {
     const owner = metricOwner.get(metricName);
     if (!owner) continue;
 
+    // Only relevant if the owner entity is in the grain
+    if (!grainSet.has(owner.name)) continue;
+
     const prop = propMap.get(metricName);
     if (!prop) {
-      // No propagation = pure reserve. Needs a reserve row if there are
-      // foreign entities (single-entity tables don't need reserve rows).
+      // No propagation = pure reserve. Needs correction rows if there are
+      // foreign entities in the grain (single-entity tables don't need them).
       if (grainEntities.length > 1) {
-        reserveEntities.add(owner.name);
+        correctionEntities.add(owner.name);
       }
     } else {
+      // Only count hops whose target entity is in the grain
       for (const edge of prop.path) {
+        if (!grainSet.has(edge.target_entity)) continue;
         if (edge.strategy === "reserve" || edge.strategy === "elimination") {
-          reserveEntities.add(owner.name);
+          correctionEntities.add(owner.name);
         }
       }
     }
   }
 
-  const reserveCount = reserveEntities.size;
-  if (reserveCount > 0) {
+  let correctionRowCount = 0;
+  for (const entityName of correctionEntities) {
+    const entity = entityMap.get(entityName);
+    if (entity) correctionRowCount += entity.estimated_rows;
+  }
+
+  if (correctionRowCount > 0) {
     breakdown.push(
-      `Reserve rows: +${reserveCount} (${[...reserveEntities].join(", ")})`
+      `Correction rows: +${correctionRowCount} (${[...correctionEntities].map((name) => {
+        const e = entityMap.get(name);
+        return `${name}: ${e?.estimated_rows ?? 0}`;
+      }).join(", ")})`
     );
   }
 
   return {
     rows: totalRows,
-    reserve_row_count: reserveCount,
-    total: totalRows + reserveCount,
-    grain_entities: grainEntities,
+    correction_row_count: correctionRowCount,
+    total: totalRows + correctionRowCount,
     breakdown,
   };
 }
 
 /**
  * Remove duplicate and strict-subset chains. A chain that is a subset of
- * another doesn't need its own row group — its rows are a subset of the
- * larger chain's rows (with reserve values for the extra entities).
+ * another doesn't need its own row group — its rows ride along on the
+ * larger chain's rows.
  */
 function removeSubsetChains(chains: Set<string>[]): Set<string>[] {
   // Deduplicate identical chains

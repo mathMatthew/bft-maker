@@ -15,12 +15,16 @@ export function parseManifest(yamlString: string): Manifest {
   if (!raw || typeof raw !== "object") {
     throw new Error("Invalid manifest: expected a YAML object");
   }
-  return {
+  const manifest: Manifest = {
     entities: raw.entities ?? [],
     relationships: raw.relationships ?? [],
     propagations: raw.propagations ?? [],
     bft_tables: raw.bft_tables ?? [],
   };
+  if (raw.correction_labels) {
+    manifest.correction_labels = raw.correction_labels;
+  }
+  return manifest;
 }
 
 export function serializeManifest(manifest: Manifest): string {

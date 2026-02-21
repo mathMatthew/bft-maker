@@ -77,10 +77,12 @@ function validManifest(): Manifest {
     bft_tables: [
       {
         name: "department_financial",
+        entities: ["Student", "Class", "Professor"],
         metrics: ["tuition_paid", "class_budget", "salary"],
       },
       {
         name: "student_experience",
+        entities: ["Student", "Class"],
         metrics: ["satisfaction_score", "class_budget"],
       },
     ],
@@ -296,6 +298,29 @@ describe("validate", () => {
       });
       const errors = validate(m);
       assert.ok(errors.some((e) => e.rule === "strategy-weight-required" && e.message.includes("salary")));
+    });
+  });
+
+  describe("table entity references", () => {
+    it("catches nonexistent entity in table", () => {
+      const m = validManifest();
+      m.bft_tables[0].entities.push("FakeEntity");
+      const errors = validate(m);
+      assert.ok(errors.some((e) => e.rule === "table-entity-exists" && e.message.includes("FakeEntity")));
+    });
+
+    it("catches duplicate entity in table", () => {
+      const m = validManifest();
+      m.bft_tables[0].entities.push("Student");
+      const errors = validate(m);
+      assert.ok(errors.some((e) => e.rule === "table-entity-unique" && e.message.includes("Student")));
+    });
+
+    it("catches empty entities list", () => {
+      const m = validManifest();
+      m.bft_tables[0].entities = [];
+      const errors = validate(m);
+      assert.ok(errors.some((e) => e.rule === "table-entities-nonempty"));
     });
   });
 

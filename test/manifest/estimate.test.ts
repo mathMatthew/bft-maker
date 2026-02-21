@@ -4,7 +4,6 @@ import * as assert from "node:assert/strict";
 import {
   estimateRows,
   estimateTableRows,
-  deriveGrainEntities,
   fanOut,
 } from "../../src/manifest/estimate.js";
 import { loadManifest } from "../../src/manifest/yaml.js";
@@ -125,43 +124,8 @@ describe("estimateRows", () => {
   });
 });
 
-describe("deriveGrainEntities", () => {
-  it("derives grain from propagation paths", () => {
-    const manifest: Manifest = {
-      entities,
-      relationships,
-      propagations: [
-        {
-          metric: "tuition_paid",
-          path: [
-            { relationship: "Enrollment", target_entity: "Class", strategy: "allocation" },
-            { relationship: "Assignment", target_entity: "Professor", strategy: "allocation" },
-          ],
-        },
-      ],
-      bft_tables: [{ name: "test", metrics: ["tuition_paid", "salary"] }],
-    };
-    const grain = deriveGrainEntities(manifest, manifest.bft_tables[0]);
-    assert.ok(grain.includes("Student"));
-    assert.ok(grain.includes("Class"));
-    assert.ok(grain.includes("Professor"));
-    assert.equal(grain.length, 3);
-  });
-
-  it("includes home entity even without propagation", () => {
-    const manifest: Manifest = {
-      entities,
-      relationships,
-      propagations: [],
-      bft_tables: [{ name: "test", metrics: ["salary"] }],
-    };
-    const grain = deriveGrainEntities(manifest, manifest.bft_tables[0]);
-    assert.deepStrictEqual(grain, ["Professor"]);
-  });
-});
-
 describe("estimateTableRows", () => {
-  it("estimates rows from propagation-derived grain", () => {
+  it("estimates rows from declared grain entities", () => {
     const manifest: Manifest = {
       entities,
       relationships,
@@ -169,21 +133,26 @@ describe("estimateTableRows", () => {
         {
           metric: "tuition_paid",
           path: [
-            { relationship: "Enrollment", target_entity: "Class", strategy: "allocation" },
-            { relationship: "Assignment", target_entity: "Professor", strategy: "allocation" },
+            { relationship: "Enrollment", target_entity: "Class", strategy: "allocation", weight: "enrollment_share" },
+            { relationship: "Assignment", target_entity: "Professor", strategy: "allocation", weight: "assignment_share" },
           ],
         },
       ],
-      bft_tables: [{ name: "test", metrics: ["tuition_paid", "salary"] }],
+      bft_tables: [{
+        name: "test",
+        entities: ["Student", "Class", "Professor"],
+        metrics: ["tuition_paid", "salary"],
+      }],
     };
     const result = estimateTableRows(manifest, manifest.bft_tables[0]);
     assert.equal(result.rows, 180000);
-    // salary has no propagation = reserve, needs reserve row
-    assert.equal(result.reserve_row_count, 1);
-    assert.equal(result.total, 180001);
+    // salary has no propagation = reserve, needs correction rows
+    // One correction row per Professor value: 800
+    assert.equal(result.correction_row_count, 800);
+    assert.equal(result.total, 180800);
   });
 
-  it("counts elimination as needing reserve rows", () => {
+  it("counts elimination as needing correction rows", () => {
     const manifest: Manifest = {
       entities,
       relationships,
@@ -195,97 +164,37 @@ describe("estimateTableRows", () => {
           ],
         },
       ],
-      bft_tables: [{ name: "test", metrics: ["tuition_paid", "class_budget"] }],
+      bft_tables: [{
+        name: "test",
+        entities: ["Student", "Class"],
+        metrics: ["tuition_paid", "class_budget"],
+      }],
     };
     const result = estimateTableRows(manifest, manifest.bft_tables[0]);
-    assert.ok(result.reserve_row_count >= 1);
+    // class_budget elimination → correction rows for Class: 1200
+    // tuition_paid has no propagation but Student is home, needs correction if foreign entities exist
+    // Student has foreign entity (Class) and no propagation for tuition → correction rows for Student: 45000
+    assert.equal(result.correction_row_count, 1200 + 45000);
   });
 
-  it("no reserve rows for single-entity table", () => {
+  it("no correction rows for single-entity table", () => {
     const manifest: Manifest = {
       entities,
       relationships,
       propagations: [],
-      bft_tables: [{ name: "test", metrics: ["salary"] }],
+      bft_tables: [{
+        name: "test",
+        entities: ["Professor"],
+        metrics: ["salary"],
+      }],
     };
     const result = estimateTableRows(manifest, manifest.bft_tables[0]);
     assert.equal(result.rows, 800);
-    assert.equal(result.reserve_row_count, 0);
+    assert.equal(result.correction_row_count, 0);
     assert.equal(result.total, 800);
   });
-});
 
-describe("estimateTableRows — independent chains", () => {
-  // Shared dimension: Building and Program both connect to Month
-  // but no metric spans both. Codegen emits UNION ALL, not cross product.
-  const building: Entity = {
-    name: "Building",
-    role: "leaf",
-    detail: true,
-    estimated_rows: 5,
-    metrics: [
-      { name: "maintenance_cost", type: "currency", nature: "additive" },
-    ],
-  };
-  const program: Entity = {
-    name: "Program",
-    role: "leaf",
-    detail: true,
-    estimated_rows: 3,
-    metrics: [
-      { name: "applications", type: "integer", nature: "additive" },
-    ],
-  };
-  const month: Entity = {
-    name: "Month",
-    role: "bridge",
-    detail: true,
-    estimated_rows: 12,
-    metrics: [],
-  };
-  const buildingMonth: Relationship = {
-    name: "BuildingMonth",
-    between: ["Building", "Month"],
-    type: "many-to-many",
-    estimated_links: 60,
-  };
-  const programMonth: Relationship = {
-    name: "ProgramMonth",
-    between: ["Program", "Month"],
-    type: "many-to-many",
-    estimated_links: 36,
-  };
-  const sharedEntities = [building, program, month];
-  const sharedRels = [buildingMonth, programMonth];
-
-  it("shared dimension with independent chains sums rows (UNION ALL)", () => {
-    const manifest: Manifest = {
-      entities: sharedEntities,
-      relationships: sharedRels,
-      propagations: [
-        {
-          metric: "maintenance_cost",
-          path: [
-            { relationship: "BuildingMonth", target_entity: "Month", strategy: "allocation", weight: "equal_share" },
-          ],
-        },
-        {
-          metric: "applications",
-          path: [
-            { relationship: "ProgramMonth", target_entity: "Month", strategy: "allocation", weight: "equal_share" },
-          ],
-        },
-      ],
-      bft_tables: [{ name: "combined", metrics: ["maintenance_cost", "applications"] }],
-    };
-    const result = estimateTableRows(manifest, manifest.bft_tables[0]);
-    // Two independent chains: Building×Month (60) + Program×Month (36) = 96
-    // NOT cross product Building×Month×Program (180)
-    assert.equal(result.rows, 60 + 36);
-    assert.ok(result.breakdown.some((b) => b.includes("UNION ALL")));
-  });
-
-  it("completely unrelated entities sum rows", () => {
+  it("unrelated entities sum rows (sparse union)", () => {
     const entityA: Entity = {
       name: "EntityA",
       role: "leaf",
@@ -304,50 +213,20 @@ describe("estimateTableRows — independent chains", () => {
       entities: [entityA, entityB],
       relationships: [],
       propagations: [],
-      bft_tables: [{ name: "unrelated", metrics: ["metric_a", "metric_b"] }],
+      bft_tables: [{
+        name: "unrelated",
+        entities: ["EntityA", "EntityB"],
+        metrics: ["metric_a", "metric_b"],
+      }],
     };
     const result = estimateTableRows(manifest, manifest.bft_tables[0]);
+    // Unrelated entities: sparse union
     assert.equal(result.rows, 100 + 50);
-    assert.ok(result.breakdown.some((b) => b.includes("UNION ALL")));
   });
 
-  it("metric spanning shared dimension forces cross product", () => {
-    // If a metric propagates Building → Month → Program, all three
-    // are in one chain and must be cross-producted.
-    const directRel: Relationship = {
-      name: "BuildingProgram",
-      between: ["Building", "Program"],
-      type: "many-to-many",
-      estimated_links: 15,
-    };
-    const manifest: Manifest = {
-      entities: sharedEntities,
-      relationships: [...sharedRels, directRel],
-      propagations: [
-        {
-          metric: "maintenance_cost",
-          path: [
-            { relationship: "BuildingMonth", target_entity: "Month", strategy: "allocation", weight: "equal_share" },
-            { relationship: "ProgramMonth", target_entity: "Program", strategy: "allocation", weight: "equal_share" },
-          ],
-        },
-        {
-          metric: "applications",
-          path: [
-            { relationship: "ProgramMonth", target_entity: "Month", strategy: "allocation", weight: "equal_share" },
-          ],
-        },
-      ],
-      bft_tables: [{ name: "spanning", metrics: ["maintenance_cost", "applications"] }],
-    };
-    const result = estimateTableRows(manifest, manifest.bft_tables[0]);
-    // maintenance_cost chain: {Building, Month, Program} — cross product
-    // applications chain: {Program, Month} — subset, removed
-    // Result: single chain cross product through all three
-    assert.ok(result.rows > 96);
-  });
-
-  it("subset chains are absorbed by larger chains", () => {
+  it("propagation hops outside grain are ignored for correction counting", () => {
+    // tuition propagates Student → Class → Professor, but Professor
+    // isn't in the grain — the hop to Professor is irrelevant.
     const manifest: Manifest = {
       entities,
       relationships,
@@ -355,50 +234,61 @@ describe("estimateTableRows — independent chains", () => {
         {
           metric: "tuition_paid",
           path: [
-            { relationship: "Enrollment", target_entity: "Class", strategy: "allocation" },
-            { relationship: "Assignment", target_entity: "Professor", strategy: "allocation" },
-          ],
-        },
-        {
-          metric: "class_budget",
-          path: [
-            { relationship: "Enrollment", target_entity: "Student", strategy: "elimination" },
+            { relationship: "Enrollment", target_entity: "Class", strategy: "allocation", weight: "enrollment_share" },
+            { relationship: "Assignment", target_entity: "Professor", strategy: "reserve" },
           ],
         },
       ],
-      bft_tables: [{ name: "test", metrics: ["tuition_paid", "class_budget", "salary"] }],
+      bft_tables: [{
+        name: "test",
+        entities: ["Student", "Class"],
+        metrics: ["tuition_paid"],
+      }],
     };
     const result = estimateTableRows(manifest, manifest.bft_tables[0]);
-    // tuition chain: {Student, Class, Professor} — largest
-    // class_budget chain: {Class, Student} — subset, removed
-    // salary chain: {Professor} — subset, removed
-    // Single chain: 180000
-    assert.equal(result.rows, 180000);
+    // The reserve hop to Professor is outside the grain — no correction row for it
+    assert.equal(result.correction_row_count, 0);
   });
 });
 
 describe("estimateTableRows — reference manifests", () => {
-  it("university-ops combined table uses UNION ALL (not cross product)", () => {
+  it("university-ops combined table: Building×Month + Program×Month", () => {
     const m = loadManifest(path.join(dataDir, "university-ops/manifest.yaml"));
     const combined = m.bft_tables.find((t) => t.name === "monthly_operations")!;
     const result = estimateTableRows(m, combined);
-    // Building×Month (60) + Program×Month (36) = 96, not 180
+    // Building×Month (60) + Program×Month (36) = 96 (Month connects both)
+    // NOT Building×Month×Program cross product
     assert.equal(result.rows, 96);
-    assert.ok(result.breakdown.some((b) => b.includes("UNION ALL")));
   });
 
-  it("university-ops facilities-only table is single chain", () => {
+  it("university-ops facilities-only table", () => {
     const m = loadManifest(path.join(dataDir, "university-ops/manifest.yaml"));
     const facilities = m.bft_tables.find((t) => t.name === "facilities_monthly")!;
     const result = estimateTableRows(m, facilities);
     assert.equal(result.rows, 60);
   });
 
-  it("university-ops admissions-only table is single chain", () => {
+  it("university-ops admissions-only table", () => {
     const m = loadManifest(path.join(dataDir, "university-ops/manifest.yaml"));
     const admissions = m.bft_tables.find((t) => t.name === "admissions_monthly")!;
     const result = estimateTableRows(m, admissions);
     assert.equal(result.rows, 36);
+  });
+
+  it("university department_financial table", () => {
+    const m = loadManifest(path.join(dataDir, "university/manifest.yaml"));
+    const table = m.bft_tables.find((t) => t.name === "department_financial")!;
+    const result = estimateTableRows(m, table);
+    // 90 enrollments × (13 assignments / 10 classes) = 117 rows
+    assert.equal(result.rows, 117);
+  });
+
+  it("northwind order_product table", () => {
+    const m = loadManifest(path.join(dataDir, "northwind/manifest.yaml"));
+    const table = m.bft_tables.find((t) => t.name === "order_product")!;
+    const result = estimateTableRows(m, table);
+    // 2155 links (OrderDetails M-M)
+    assert.equal(result.rows, 2155);
   });
 });
 

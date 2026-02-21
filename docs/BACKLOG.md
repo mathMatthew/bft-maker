@@ -1,26 +1,43 @@
 # Backlog
 
-Items discovered during PR #2 review that need investigation before or during codegen.
+No open items. Items below have been resolved.
 
-## 1. Reserve row counting may undercount for multi-entity tables
+---
 
-**Context:** `estimateTableRows` in `estimate.ts` counts reserve rows by adding the metric's *home entity* to `reserveEntities` when the metric has an elimination edge or no propagation (pure reserve). This produces one `<Reserve X>` row per entity that owns a reserve/elimination metric.
+## Resolved
 
-**Potential issue:** Consider `class_budget` (owned by Class) with elimination toward Student. In a Student × Class × Professor table, the reserve row is `<Reserve Class>`. But `class_budget` is also implicitly reserve for Professor (not in its propagation path). Does the generated SQL need a separate reserve mechanism for the Professor dimension of `class_budget`, or does the single `<Reserve Class>` row handle it?
+### 1. Correction row structure and naming (resolved)
 
-The answer depends on the SQL shape the codegen produces. If the reserve row is a single row with `Professor = <Reserve Professor>` AND `Class = <Reserve Class>`, then one row handles both. If reserve rows are per-entity (one row per entity needing correction), the count might be correct but the row structure needs clarification.
+**Problem:** "Reserve row" was used for three different things: the reserve strategy, the correction mechanism, and the label on the report. Confusing because elimination metrics also need correction rows.
 
-**Action:** When implementing codegen, write out the SQL for a 3-entity table with mixed strategies (allocation + elimination + reserve) and verify the reserve row structure. The estimation should match whatever the SQL produces.
+**Resolution:**
 
-## 2. `student_experience` table grain surprise from multi-hop propagation
+| Concept | Name |
+|---|---|
+| Strategy: don't distribute | **reserve** |
+| Strategy: repeat full value | **elimination** |
+| Row correcting reserve metrics | **reserve row** |
+| Row correcting elimination metrics | **elimination row** |
+| Label for reserve rows on report | configurable, default `<Unallocated>` |
+| Label for elimination rows on report | configurable, default `<Unallocated>` |
 
-**Context:** The university reference manifest originally had `student_experience` with metrics `[tuition_paid, satisfaction_score, class_budget]`. The name suggests a student-level view, but `tuition_paid` propagates Student → Class → Professor — pulling Professor into the grain. The table silently becomes Student × Class × Professor instead of the expected Student × Class.
+"Correction row" is the umbrella term for both. One correction row per entity VALUE (not per entity), so correction row count = `entity.estimated_rows` for each entity needing corrections.
 
-**Fixed in review:** Removed `tuition_paid` from `student_experience` so the grain stays Student × Class. But the underlying design question remains:
+Both labels default to the same value so they land on the same row in practice. Configurable via `correction_labels` in the manifest.
 
-**Design question:** Should the system warn when a metric's multi-hop propagation pulls unexpected entities into a table's grain? The user might add a metric to a table not realizing its propagation path extends further than expected. Options:
-- **Warn:** "Adding tuition_paid to student_experience pulls Professor into the grain (via tuition_paid's path: Student → Class → Professor). The table will be Student × Class × Professor. Continue?"
-- **No warn:** The grain is derived mechanically; the user should understand their propagation paths.
-- **Allow grain pinning:** Let the table declare which entities it wants in the grain, and error if a metric's path extends beyond that.
+### 2. Grain derivation from propagation paths (resolved)
 
-This relates to open question #14 in SCHEMA_DESIGN.md (do intermediate entities belong in the grain?). Resolve together during codegen.
+**Problem:** `deriveGrainEntities` unioned all entities from all propagation paths, causing grain surprises. Adding `tuition_paid` (path: Student → Class → Professor) to a Student × Class table silently pulled Professor into the grain.
+
+**Resolution:** Grain is declared explicitly on the table via an `entities` field. The table declares both which entities (grain) and which metrics to include — two independent decisions. Propagation paths describe what a metric MEANS when it encounters foreign entities; they don't determine the grain. Only hops whose target entity is in the declared grain are active.
+
+```yaml
+bft_tables:
+  - name: student_experience
+    entities: [Student, Class]
+    metrics: [tuition_paid, satisfaction_score, class_budget]
+```
+
+The math is always correct regardless of what entities/metrics you pick. The wizard can warn about useless configurations (e.g., "tuition is reserve for Class, so you'll see zeros on every Class row"), but validation doesn't block them.
+
+This resolves SCHEMA_DESIGN.md open question #14.

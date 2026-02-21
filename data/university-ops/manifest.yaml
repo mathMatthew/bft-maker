@@ -76,15 +76,18 @@ propagations:
 
 bft_tables:
   # Combined monthly operations dashboard.
-  # Grain: Building × Month (60) UNION ALL Program × Month (36) = 96 rows.
+  # Building × Month (60) UNION ALL Program × Month (36) = 96 rows.
   # Building and Program are all-reserve for each other — no cross product.
   - name: monthly_operations
+    entities: [Building, Program, Month]
     metrics: [maintenance_cost, applications_received, acceptance_rate]
 
   # Facilities-only view: just Building × Month
   - name: facilities_monthly
+    entities: [Building, Month]
     metrics: [maintenance_cost]
 
   # Admissions-only view: just Program × Month
   - name: admissions_monthly
+    entities: [Program, Month]
     metrics: [applications_received, acceptance_rate]

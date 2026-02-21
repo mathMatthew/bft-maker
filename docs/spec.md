@@ -6,7 +6,7 @@ bft-maker takes a normalized relational schema and produces flat, pivot-safe tab
 
 The system doesn't ask the user to understand data modeling. It asks them to answer one question: **what do you need to see together on the same report, and when you see it, what do you expect the numbers to mean?**
 
-Everything else — the grain, the table count, the metric math, the generated code — follows from that answer.
+Everything else — the table count, the metric math, the generated code — follows from that answer.
 
 ---
 
@@ -55,17 +55,17 @@ There are three strategies for additive metrics and one pattern for non-additive
 
 ### Reserve
 
-The metric contributes nothing to foreign rows. Its full value is redirected to a placeholder reserve row (e.g., `<Reserve Employee>`). The report shows the metric total in an isolated line, and entity-level rows show nothing for that metric.
+The metric contributes nothing to foreign rows. Its full value is redirected to a correction row (e.g., `<Unallocated>`). The correction row label is configurable per table (default `<Unallocated>`). One correction row is emitted per entity value that needs correction, not per entity. The report shows the metric total in an isolated line, and entity-level rows show nothing for that metric.
 
-`SUM` is safe as long as reserve rows are included. Filtering them out drops the value entirely.
+`SUM` is safe as long as correction rows are included. Filtering them out drops the value entirely.
 
 Reserve is the **default strategy** when no relationship exists between entities. It makes no assumptions about how a metric relates to foreign rows. It is the safe, assumption-free starting point.
 
 ### Elimination
 
-Every foreign row carries the full value. A negative offset on a reserve row zeroes out the duplicates. The report shows the metric total on every row — useful when the number is context, not attribution — and `SUM` still returns the correct total because the reserve row cancels the overcounting.
+Every foreign row carries the full value. A negative offset on a correction row zeroes out the duplicates. The report shows the metric total on every row — useful when the number is context, not attribution — and `SUM` still returns the correct total because the correction row cancels the overcounting.
 
-`SUM` is safe as long as reserve rows are included. Filtering them out produces a multiple of the true total.
+`SUM` is safe as long as correction rows are included. Filtering them out produces a multiple of the true total.
 
 Elimination is useful when users want to see a reference number alongside their own entity's detail. "Every employee in the Southwest can see that the region did $2M in revenue" — the $2M appears on every row, and the sum at the bottom still says $2M.
 
@@ -171,7 +171,7 @@ Cardinalities are declared upfront so the system can estimate output table sizes
 
 *For each metric that isn't staying on its own rows (reserve), how does it spread to other entities, and what does it mean when it gets there?*
 
-Every metric starts as **reserve** — it contributes nothing to foreign rows and its total lives on a placeholder reserve row. Reserve is the safe, assumption-free default. No propagation path needs to be declared for it.
+Every metric starts as **reserve** — it contributes nothing to foreign rows and its total lives on a correction row. Reserve is the safe, assumption-free default. No propagation path needs to be declared for it.
 
 The user upgrades metrics away from reserve one at a time:
 
@@ -220,13 +220,13 @@ propagations:
 
 **Direction is implicit.** Each metric propagates outward from its home entity. The path lists target entities in order. Relationships are undirected; the metric's home determines the direction.
 
-**Each metric has its own path.** Two metrics from the same entity can use different paths. Tuition might allocate through Enrollment, while satisfaction propagates through a different relationship. The table's grain is the union of all entities across all paths.
+**Each metric has its own path.** Two metrics from the same entity can use different paths. Tuition might allocate through Enrollment, while satisfaction propagates through a different relationship.
 
 **Entities not in the path get reserve.** If tuition propagates Student → Class but the table also includes Professor, tuition is automatically reserve for Professor. No declaration needed.
 
 **The feedback loop.** Sometimes the user wants attribution but has no relationship to support it. "I want to see revenue per employee, but there's no link between Customers and Employees." This is a signal to go back to Phase A and either declare a missing relationship (maybe through an Account or Project bridge), create a multi-hop path through a shared dimension (like Org), or accept reserve.
 
-**Shared dimensions.** Two unrelated entities can be connected through a shared entity like Month or Department. The propagation path goes through the shared entity using two relationships. The shared entity enters the grain, providing explicit alignment — no naming convention needed.
+**Shared dimensions.** Two unrelated entities can be connected through a shared entity like Month or Department. The propagation path goes through the shared entity using two relationships. The shared entity must be declared in the table's entities list, providing explicit alignment — no naming convention needed.
 
 **Phase B outputs:** Propagation paths for every non-reserve metric. Every metric has an unambiguous meaning on every entity's rows. No commitment to table shape has been made yet.
 
@@ -234,27 +234,25 @@ propagations:
 
 ### Phase C: Topology
 
-*Given the propagation paths, how many flat tables do you want, and how big will they be?*
+*How many flat tables do you want, which entities and metrics does each one include, and how big will they be?*
 
 This is a tradeoff decision, not a derivable answer. The options are presented; the user chooses.
 
 #### What Gets Computed
 
-The grain of a table is **derived** from its metrics' propagation paths. The grain is the union of all entities touched: each metric's home entity plus all target entities in its path. No manual grain specification needed.
+Each table explicitly declares its **entities** and **metrics**. The grain is the declared entities list — `Student × Class × Professor` if those are the three entities declared. The system validates that every declared entity is reachable from the metrics' propagation paths, and that every entity touched by those paths is declared.
 
 ```
 Table: department_financial
-  Metrics: tuition_paid, class_budget, salary
-  tuition_paid chain: {Student, Class, Professor}
-  class_budget chain: {Class, Student} → subset, absorbed
-  salary chain: {Professor} → subset, absorbed
-  Grain: Student × Class × Professor
-  Estimated rows: ~180,000 + reserve rows
+  Entities: [Student, Class, Professor]
+  Metrics: [tuition_paid, class_budget, salary]
+  Grain: Student × Class × Professor (from declared entities)
+  Estimated rows: ~180,000 + correction rows
 
 Table: student_experience
-  Metrics: satisfaction_score, class_budget
-  All chains within {Student, Class}
-  Grain: Student × Class
+  Entities: [Student, Class]
+  Metrics: [tuition_paid, satisfaction_score, class_budget]
+  Grain: Student × Class (from declared entities)
   Estimated rows: ~120,000
 ```
 
@@ -270,7 +268,7 @@ If merging tables would produce millions of rows, the user sees that cost before
 
 #### Simplification Suggestions
 
-Before the user commits to a topology, score every decision made in Phases A and B by its cost to the output — row count, column count, reserve row complexity, number of allocation weights, and sparsity. Present the **top 5 simplifications** that would most reduce the cost of the final table(s).
+Before the user commits to a topology, score every decision made in Phases A and B by its cost to the output — row count, column count, correction row complexity, number of allocation weights, and sparsity. Present the **top 5 simplifications** that would most reduce the cost of the final table(s).
 
 Each suggestion is a specific, reversible change to a Phase A or Phase B decision, paired with a concrete description of what it saves and what it sacrifices.
 
@@ -286,7 +284,7 @@ Suggested simplifications for: financial_overview
 2. Move salary to Reserve instead of Allocation (Phase B)
    Save: Eliminates salary allocation weights and removes
          the need for the Assignment relationship entirely.
-   Cost: Salary appears only on reserve rows, not attributable
+   Cost: Salary appears only on correction rows, not attributable
          to individual classes or students.
    Changes: If no other metric needs Professor, this also
             enables simplification #1.
@@ -299,7 +297,7 @@ Suggested simplifications for: financial_overview
 4. Downgrade class_budget from Allocation to Elimination (Phase B)
    Save: Removes enrollment_count weighting. Simpler column.
    Cost: Every student row shows the full class budget instead
-         of their share. Reserve row required to correct the sum.
+         of their share. Correction row required to correct the sum.
 
 5. Roll up Student detail for financial_overview (Phase A)
    Save: ~179,000 rows. Table collapses to ~1,800 rows
@@ -314,22 +312,24 @@ The user can accept any combination of suggestions, reject all of them, or use t
 
 #### What the User Decides
 
-The user picks a topology, informed by the cost estimates and the simplification suggestions. Tables just list which metrics to include — the grain and row estimate are derived from the propagation paths defined in Phase B.
+The user picks a topology, informed by the cost estimates and the simplification suggestions. Each table declares both its entities and its metrics. The grain is the declared entities list. Row estimates follow from the entities and their relationships.
 
 ```yaml
 bft_tables:
   - name: department_financial
+    entities: [Student, Class, Professor]
     metrics: [tuition_paid, class_budget, salary]
-    # Derived grain: Student × Class × Professor
+    # Grain: Student × Class × Professor
     # Estimated rows: ~180,000
 
   - name: student_experience
-    metrics: [satisfaction_score, class_budget]
-    # Derived grain: Student × Class
+    entities: [Student, Class]
+    metrics: [tuition_paid, satisfaction_score, class_budget]
+    # Grain: Student × Class
     # Estimated rows: ~120,000
 ```
 
-**Phase C outputs:** The final table topology. The manifest is now complete and ready for code generation.
+**Phase C outputs:** The final table topology — each table's declared entities and metrics. The manifest is now complete and ready for code generation.
 
 ---
 
@@ -361,11 +361,11 @@ SELECT *,
 FROM base_grain
 ```
 
-**Elimination** — a union with a negating reserve row:
+**Elimination** — a union with a negating correction row:
 ```sql
 SELECT *, class_budget AS class_budget_elim FROM base_grain
 UNION ALL
-SELECT '<Reserve>', ..., -1 * SUM(class_budget) + class_budget AS class_budget_elim
+SELECT '<Unallocated>', ..., -1 * SUM(class_budget) + class_budget AS class_budget_elim
 FROM base_grain GROUP BY ...
 ```
 
@@ -384,8 +384,8 @@ The generator produces a DAG of independent steps — one per metric-strategy pa
 Every assertion is derivable directly from the manifest with no additional input:
 
 - **Allocation metrics:** `SUM(allocated) == SUM(original)` for every entity group.
-- **Elimination metrics:** `SUM including reserves == expected total` and `SUM excluding reserves == expected overcounted total`.
-- **Reserve metrics:** `SUM including reserves == expected total` and value appears only on reserve rows.
+- **Elimination metrics:** `SUM including correction rows == expected total` and `SUM excluding correction rows == expected overcounted total`.
+- **Reserve metrics:** `SUM including correction rows == expected total` and value appears only on correction rows.
 - **Sum / Sum metrics:** Weights sum to expected value per entity (typically 1.0).
 - **Row counts:** Actual output rows match estimated rows within a tolerance band.
 
@@ -416,12 +416,12 @@ output/
 | Column Type | Safe to SUM? | Condition |
 |---|---|---|
 | Allocated metric | Yes | Always correct for any slice |
-| Elimination metric | Yes | Reserve rows must be included |
-| Reserve metric | Yes | Reserve rows must be included |
+| Elimination metric | Yes | Correction rows must be included |
+| Reserve metric | Yes | Correction rows must be included |
 | Sum / Sum metric | No | Must use `SUM(weighted) / SUM(weight)` |
 | Count column | Depends | Follows the same rules as its assigned strategy |
 
-Reserve rows (`<Reserve Class>`, `<Reserve Employee>`, etc.) must be present in any aggregation that uses Elimination or Reserve strategy columns. Report filters that exclude these rows will silently produce wrong numbers. All such columns carry a persistent flag in the output schema indicating this dependency.
+Correction rows (labeled `<Unallocated>` by default, configurable per table) must be present in any aggregation that uses Elimination or Reserve strategy columns. Report filters that exclude these rows will silently produce wrong numbers. All such columns carry a persistent flag in the output schema indicating this dependency.
 
 ---
 
@@ -433,7 +433,7 @@ bft-maker is a pipeline with three decision phases and a mechanical code generat
 
 **Phase B** resolves propagation: for each metric that isn't staying reserve, define a propagation path — which relationships to traverse, what strategy at each hop. Everything starts as reserve. Phase B may loop back to Phase A when propagation questions reveal missing relationships or unnecessary detail.
 
-**Phase C** resolves topology: given the propagation paths, how many tables, at what row cost, with what tradeoffs. Grain and row estimates are derived from the paths. The user chooses. The manifest is complete.
+**Phase C** resolves topology: how many tables, which entities and metrics each one declares, and at what row cost. The grain is the declared entities list. The user chooses. The manifest is complete.
 
 Then the machine takes over:
 

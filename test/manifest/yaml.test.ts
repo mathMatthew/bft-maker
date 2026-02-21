@@ -48,6 +48,7 @@ function universityManifest(): Manifest {
     bft_tables: [
       {
         name: "student_experience",
+        entities: ["Student", "Class"],
         metrics: ["tuition_paid", "satisfaction_score"],
       },
     ],

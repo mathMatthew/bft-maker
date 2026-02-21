@@ -83,6 +83,7 @@ interface Manifest {
   relationships: Relationship[];
   propagations: MetricPropagation[];
   bft_tables: BftTable[];
+  correction_labels?: CorrectionLabels;
 }
 
 interface Entity {
@@ -129,12 +130,23 @@ interface PropagationEdge {
 }
 
 /**
- * A BFT table. Grain is derived from the union of all entities
- * across all included metrics' propagation paths.
+ * A BFT table. The entities list declares the grain —
+ * what dimensions each row represents.
  */
 interface BftTable {
   name: string;
+  entities: string[];            // declares the grain (which entities form the row)
   metrics: string[];             // which metrics to include
+}
+
+/**
+ * Optional labels for correction rows. When reserve or elimination
+ * strategies produce correction rows, these labels identify them
+ * in the entity columns.
+ */
+interface CorrectionLabels {
+  reserve_label: string;         // default: "<Unallocated>"
+  elimination_label: string;     // default: "<Unallocated>"
 }
 ```
 
@@ -142,7 +154,7 @@ interface BftTable {
 
 **Per-metric propagation paths replace metric clusters.** The old schema grouped metrics into clusters with traversal rules per cluster. The new schema defines propagation per-metric. Each metric has a path describing how it spreads from its home entity outward. Entities not in the path default to reserve.
 
-**Grain is derived, not declared.** The table grain is the union of all entities touched by the table's metrics (home entities + propagation targets). No manual grain specification needed.
+**Grain is declared explicitly.** The table's `entities` list determines the grain — which dimensions each row represents. Propagation paths describe what metrics mean on foreign rows (how a metric's value spreads across entity boundaries), not which entities are in the grain.
 
 **Relationships are undirected.** Relationships describe what joins exist. Direction comes from each metric's propagation path — always outward from the metric's home entity.
 
@@ -169,7 +181,7 @@ Rules:
 - One M-M bridge: `relationship.estimated_links`
 - Two M-M bridges sharing a bridge entity: `links₁ × (links₂ / bridge.estimated_rows)`
 - Disconnected entities (no M-M connecting them): sum of row counts (sparse union)
-- Reserve rows: +1 per entity that has reserve-strategy metrics
+- Correction rows: `entity.estimated_rows` per entity needing corrections (reserve or elimination strategy metrics)
 
 ### Table-level estimation with independent chains
 
@@ -177,21 +189,13 @@ Rules:
 function estimateTableRows(manifest: Manifest, table: BftTable): RowEstimate;
 ```
 
-`estimateTableRows` is aware of propagation paths and detects **independent chains**. Each metric's propagation path defines a chain of entities (home + targets). When no single metric spans two chains, the codegen emits UNION ALL — not a cross product. The estimation reflects this:
+`estimateTableRows` takes the table's declared grain entities and is aware of propagation paths. It detects **independent chains**. Each metric's propagation path defines a chain of entities (home + targets). When no single metric spans two chains, the codegen emits UNION ALL — not a cross product. The estimation reflects this:
 
 - Each metric's chain: `{home_entity} ∪ {target entities in path}`
 - Subset chains are absorbed by larger chains (their rows ride along)
 - Independent chains (no metric spans both) are summed, not multiplied
 
 Example: Building → Month (60 links) and Program → Month (36 links), no metric spanning Building-to-Program. Estimate: 60 + 36 = 96 rows. Not Building × Month × Program = 180.
-
-### Grain derivation
-
-```typescript
-function deriveGrainEntities(manifest: Manifest, table: BftTable): string[];
-```
-
-The grain is the union of all entities touched by the table's metrics: each metric's home entity plus all target entities in its propagation path. Metrics with no propagation contribute only their home entity.
 
 ---
 
