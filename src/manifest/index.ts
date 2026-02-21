@@ -3,17 +3,17 @@ export type {
   Entity,
   MetricDef,
   Relationship,
-  TraversalRule,
-  MetricCluster,
-  ResolvedMetric,
+  PropagationEdge,
+  MetricPropagation,
   BftTable,
   Strategy,
 } from "./types.js";
+export { VALID_STRATEGIES } from "./types.js";
 
 export { validate } from "./validate.js";
 export type { ValidationError } from "./validate.js";
 
-export { estimateRows, estimateTableRows, fanOut } from "./estimate.js";
+export { estimateRows, estimateTableRows, deriveGrainEntities, fanOut } from "./estimate.js";
 export type { RowEstimate } from "./estimate.js";
 
 export {

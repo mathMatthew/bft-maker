@@ -1,0 +1,90 @@
+# University operations: two unrelated areas sharing a time dimension (Month).
+#
+# Facilities tracks building maintenance costs by month.
+# Admissions tracks program application counts by month.
+# No relationship between buildings and programs — they just share Month.
+#
+# Demonstrates:
+# - Shared dimension alignment (Month connects two unrelated entities)
+# - Reserve between unrelated entities (Building ↔ Program)
+# - UNION ALL estimation: Building×Month (60) + Program×Month (36) = 96 rows
+#   NOT cross product Building×Month×Program (180)
+
+entities:
+  - name: Building
+    role: leaf
+    detail: true
+    estimated_rows: 5
+    metrics:
+      - name: maintenance_cost
+        type: currency
+        nature: additive
+
+  - name: Program
+    role: leaf
+    detail: true
+    estimated_rows: 3
+    metrics:
+      - name: applications_received
+        type: integer
+        nature: additive
+      - name: acceptance_rate
+        type: percentage
+        nature: non-additive
+
+  - name: Month
+    role: bridge
+    detail: true
+    estimated_rows: 12
+    metrics: []
+
+relationships:
+  - name: BuildingMonth
+    between: [Building, Month]
+    type: many-to-many
+    estimated_links: 60
+
+  - name: ProgramMonth
+    between: [Program, Month]
+    type: many-to-many
+    estimated_links: 36
+
+# Each metric propagates to Month (its shared dimension).
+# Neither propagates to the other area's entity — that defaults to reserve.
+propagations:
+  - metric: maintenance_cost
+    path:
+      - relationship: BuildingMonth
+        target_entity: Month
+        strategy: allocation
+        weight: equal_share
+
+  - metric: applications_received
+    path:
+      - relationship: ProgramMonth
+        target_entity: Month
+        strategy: allocation
+        weight: equal_share
+
+  # acceptance_rate: non-additive, uses sum_over_sum toward Month
+  - metric: acceptance_rate
+    path:
+      - relationship: ProgramMonth
+        target_entity: Month
+        strategy: sum_over_sum
+        weight: application_count
+
+bft_tables:
+  # Combined monthly operations dashboard.
+  # Grain: Building × Month (60) UNION ALL Program × Month (36) = 96 rows.
+  # Building and Program are all-reserve for each other — no cross product.
+  - name: monthly_operations
+    metrics: [maintenance_cost, applications_received, acceptance_rate]
+
+  # Facilities-only view: just Building × Month
+  - name: facilities_monthly
+    metrics: [maintenance_cost]
+
+  # Admissions-only view: just Program × Month
+  - name: admissions_monthly
+    metrics: [applications_received, acceptance_rate]

@@ -16,11 +16,7 @@ function universityManifest(): Manifest {
         estimated_rows: 45000,
         metrics: [
           { name: "tuition_paid", type: "currency", nature: "additive" },
-          {
-            name: "satisfaction_score",
-            type: "rating",
-            nature: "non-additive",
-          },
+          { name: "satisfaction_score", type: "rating", nature: "non-additive" },
         ],
       },
       {
@@ -41,28 +37,18 @@ function universityManifest(): Manifest {
         estimated_links: 120000,
       },
     ],
-    metric_clusters: [
+    propagations: [
       {
-        name: "student_experience",
-        metrics: ["tuition_paid", "satisfaction_score"],
-        traversals: [],
+        metric: "tuition_paid",
+        path: [
+          { relationship: "Enrollment", target_entity: "Class", strategy: "allocation", weight: "enrollment_share" },
+        ],
       },
     ],
     bft_tables: [
       {
-        name: "student_advising",
-        grain: "Student × Class",
-        grain_entities: ["Student", "Class"],
-        clusters_served: ["student_experience"],
-        estimated_rows: 120000,
-        metrics: [
-          {
-            metric: "tuition_paid",
-            strategy: "direct",
-            sum_safe: true,
-          },
-        ],
-        reserve_rows: [],
+        name: "student_experience",
+        metrics: ["tuition_paid", "satisfaction_score"],
       },
     ],
   };
@@ -94,11 +80,18 @@ describe("YAML round-trip", () => {
     const parsed = parseManifest(yaml);
     assert.equal(parsed.relationships.length, 1);
     assert.equal(parsed.relationships[0].name, "Enrollment");
-    assert.deepStrictEqual(parsed.relationships[0].between, [
-      "Student",
-      "Class",
-    ]);
+    assert.deepStrictEqual(parsed.relationships[0].between, ["Student", "Class"]);
     assert.equal(parsed.relationships[0].type, "many-to-many");
+  });
+
+  it("parses propagations correctly", () => {
+    const original = universityManifest();
+    const yaml = serializeManifest(original);
+    const parsed = parseManifest(yaml);
+    assert.equal(parsed.propagations.length, 1);
+    assert.equal(parsed.propagations[0].metric, "tuition_paid");
+    assert.equal(parsed.propagations[0].path.length, 1);
+    assert.equal(parsed.propagations[0].path[0].strategy, "allocation");
   });
 
   it("handles empty sections gracefully", () => {
@@ -109,7 +102,7 @@ relationships: []
     const parsed = parseManifest(yaml);
     assert.deepStrictEqual(parsed.entities, []);
     assert.deepStrictEqual(parsed.relationships, []);
-    assert.deepStrictEqual(parsed.metric_clusters, []);
+    assert.deepStrictEqual(parsed.propagations, []);
     assert.deepStrictEqual(parsed.bft_tables, []);
   });
 

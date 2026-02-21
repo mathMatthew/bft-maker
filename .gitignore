@@ -1,7 +1,8 @@
 node_modules/
 dist/
 data/movielens/
-data/northwind/
+data/northwind/*
+!data/northwind/manifest.yaml
 *.js
 *.js.map
 *.d.ts

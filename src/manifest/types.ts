@@ -2,8 +2,11 @@ export type Strategy =
   | "reserve"
   | "elimination"
   | "allocation"
-  | "sum_over_sum"
-  | "direct";
+  | "sum_over_sum";
+
+export const VALID_STRATEGIES: ReadonlySet<string> = new Set([
+  "reserve", "elimination", "allocation", "sum_over_sum",
+]);
 
 export interface MetricDef {
   name: string;
@@ -19,6 +22,7 @@ export interface Entity {
   metrics: MetricDef[];
 }
 
+/** Relationships are undirected — they describe what joins exist. */
 export interface Relationship {
   name: string;
   between: [string, string];
@@ -27,40 +31,38 @@ export interface Relationship {
   weight_column?: string;
 }
 
-export interface TraversalRule {
-  metric: string;
-  on_foreign_rows: Strategy;
-  weight?: string;
-  weight_source?: string;
-}
-
-export interface MetricCluster {
-  name: string;
-  metrics: string[];
-  traversals: TraversalRule[];
-}
-
-export interface ResolvedMetric {
-  metric: string;
+/**
+ * A single hop in a metric's propagation path.
+ * Direction is implicit: outward from the metric's home entity.
+ */
+export interface PropagationEdge {
+  relationship: string;
+  target_entity: string;
   strategy: Strategy;
   weight?: string;
-  weight_column?: string;
-  sum_safe: boolean;
 }
 
+/**
+ * Defines how a metric propagates from its home entity to foreign entities.
+ * Metrics not listed here default to reserve (no propagation needed).
+ */
+export interface MetricPropagation {
+  metric: string;
+  path: PropagationEdge[];
+}
+
+/**
+ * A BFT table. Grain is derived from the union of all entities
+ * across all included metrics' propagation paths.
+ */
 export interface BftTable {
   name: string;
-  grain: string;
-  grain_entities: string[];
-  clusters_served: string[];
-  estimated_rows: number;
-  metrics: ResolvedMetric[];
-  reserve_rows: string[];
+  metrics: string[];
 }
 
 export interface Manifest {
   entities: Entity[];
   relationships: Relationship[];
-  metric_clusters: MetricCluster[];
+  propagations: MetricPropagation[];
   bft_tables: BftTable[];
 }
