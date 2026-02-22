@@ -6,24 +6,21 @@ No open items. Items below have been resolved.
 
 ## Resolved
 
-### 1. Correction row structure and naming (resolved)
+### 1. Placeholder labels and row structure (resolved)
 
-**Problem:** "Reserve row" was used for three different things: the reserve strategy, the correction mechanism, and the label on the report. Confusing because elimination metrics also need correction rows.
+**Problem:** "Reserve row" was used for three different things: the strategy, a row mechanism, and the label on the report. Confusing because the concept is really about what value goes in an entity column, not about special rows.
 
-**Resolution:**
+**Resolution:** The concept is **placeholder labels** — the value shown in an entity column when a metric on that row isn't about a specific entity (default `<Unallocated>`). Reserve and elimination both produce rows with placeholder labels, but for different reasons: reserve rows carry the metric's value, elimination rows carry a negative offset.
 
 | Concept | Name |
 |---|---|
 | Strategy: don't distribute | **reserve** |
 | Strategy: repeat full value | **elimination** |
-| Row correcting reserve metrics | **reserve row** |
-| Row correcting elimination metrics | **elimination row** |
-| Label for reserve rows on report | configurable, default `<Unallocated>` |
-| Label for elimination rows on report | configurable, default `<Unallocated>` |
+| Value in entity column when metric isn't about that entity | **placeholder label** |
+| Default placeholder label | `<Unallocated>` |
+| Manifest setting | `placeholder_labels` (separate for reserve and elimination) |
 
-"Correction row" is the umbrella term for both. One correction row per entity VALUE (not per entity), so correction row count = `entity.estimated_rows` for each entity needing corrections.
-
-Both labels default to the same value so they land on the same row in practice. Configurable via `correction_labels` in the manifest.
+One row per entity VALUE (not per entity), so row count = `entity.estimated_rows` for each entity with reserve or elimination metrics.
 
 ### 2. Grain derivation from propagation paths (resolved)
 

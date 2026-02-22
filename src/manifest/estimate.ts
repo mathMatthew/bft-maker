@@ -4,7 +4,7 @@ import { buildMetricOwnerMap } from "./helpers.js";
 
 export interface RowEstimate {
   rows: number;
-  correction_row_count: number;
+  placeholder_row_count: number;
   total: number;
   breakdown: string[];
 }
@@ -18,7 +18,7 @@ export interface RowEstimate {
  * - Two M-M bridges sharing a bridge entity: links1 * (links2 / bridge.estimated_rows)
  * - Each additional M-M bridge: multiply by fan-out
  * - Unrelated entities with detail: sum of row counts (sparse union)
- * - Correction rows: entity.estimated_rows per entity needing corrections
+ * - Placeholder rows: entity.estimated_rows per entity with reserve/elimination metrics
  */
 export function estimateRows(
   entities: Entity[],
@@ -63,7 +63,7 @@ export function estimateRows(
 
   return {
     rows: totalRows,
-    correction_row_count: 0,
+    placeholder_row_count: 0,
     total: totalRows,
     breakdown,
   };
@@ -78,9 +78,10 @@ export function estimateRows(
  * "active entities" = home entity + propagation targets that are in the
  * grain. Independent groups are estimated separately and summed.
  *
- * Correction rows make SUMs correct for reserve and elimination strategies.
- * There is one correction row per entity VALUE (not per entity), so the
- * count is entity.estimated_rows for each entity needing corrections.
+ * Reserve and elimination strategies produce rows where foreign entity
+ * columns show placeholder labels. There is one such row per entity VALUE
+ * (not per entity), so the count is entity.estimated_rows for each entity
+ * with reserve or elimination metrics.
  */
 export function estimateTableRows(manifest: Manifest, table: BftTable): RowEstimate {
   const metricOwner = buildMetricOwnerMap(manifest.entities);
@@ -150,16 +151,18 @@ export function estimateTableRows(manifest: Manifest, table: BftTable): RowEstim
     );
   }
 
-  // Count correction rows. One correction row per entity VALUE for each
-  // entity that has reserve or elimination metrics in this table.
+  // Count placeholder rows — rows where a foreign entity column shows a
+  // placeholder label. One per entity VALUE for each entity with reserve
+  // or elimination metrics in this table.
   //
   // Reserve: salary (Professor) with no propagation means salary=0 on all
-  // regular rows. Each professor gets a correction row holding their salary.
+  // regular rows. Each professor gets a row carrying their salary, with
+  // foreign entity columns showing the placeholder label.
   //
   // Elimination: class_budget (Class) eliminated toward Student means every
-  // Student row shows the full budget. Each class gets a correction row
-  // subtracting the overcount so SUM equals the true total.
-  const correctionEntities = new Set<string>();
+  // Student row shows the full budget. Each class gets a row carrying a
+  // negative offset so SUM equals the true total.
+  const placeholderEntities = new Set<string>();
   for (const metricName of table.metrics) {
     const owner = metricOwner.get(metricName);
     if (!owner) continue;
@@ -169,31 +172,31 @@ export function estimateTableRows(manifest: Manifest, table: BftTable): RowEstim
 
     const prop = propMap.get(metricName);
     if (!prop) {
-      // No propagation = pure reserve. Needs correction rows if there are
+      // No propagation = pure reserve. Needs placeholder rows if there are
       // foreign entities in the grain (single-entity tables don't need them).
       if (grainEntities.length > 1) {
-        correctionEntities.add(owner.name);
+        placeholderEntities.add(owner.name);
       }
     } else {
       // Only count hops whose target entity is in the grain
       for (const edge of prop.path) {
         if (!grainSet.has(edge.target_entity)) continue;
         if (edge.strategy === "reserve" || edge.strategy === "elimination") {
-          correctionEntities.add(owner.name);
+          placeholderEntities.add(owner.name);
         }
       }
     }
   }
 
-  let correctionRowCount = 0;
-  for (const entityName of correctionEntities) {
+  let placeholderRowCount = 0;
+  for (const entityName of placeholderEntities) {
     const entity = entityMap.get(entityName);
-    if (entity) correctionRowCount += entity.estimated_rows;
+    if (entity) placeholderRowCount += entity.estimated_rows;
   }
 
-  if (correctionRowCount > 0) {
+  if (placeholderRowCount > 0) {
     breakdown.push(
-      `Correction rows: +${correctionRowCount} (${[...correctionEntities].map((name) => {
+      `Placeholder rows: +${placeholderRowCount} (${[...placeholderEntities].map((name) => {
         const e = entityMap.get(name);
         return `${name}: ${e?.estimated_rows ?? 0}`;
       }).join(", ")})`
@@ -202,8 +205,8 @@ export function estimateTableRows(manifest: Manifest, table: BftTable): RowEstim
 
   return {
     rows: totalRows,
-    correction_row_count: correctionRowCount,
-    total: totalRows + correctionRowCount,
+    placeholder_row_count: placeholderRowCount,
+    total: totalRows + placeholderRowCount,
     breakdown,
   };
 }

@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as yaml from "js-yaml";
 import type { Manifest } from "./types.js";
+import { DEFAULT_PLACEHOLDER_LABELS } from "./types.js";
 
 /**
  * Parse a YAML string into a Manifest. The result is structurally unvalidated —
@@ -21,8 +22,11 @@ export function parseManifest(yamlString: string): Manifest {
     propagations: raw.propagations ?? [],
     bft_tables: raw.bft_tables ?? [],
   };
-  if (raw.correction_labels) {
-    manifest.correction_labels = raw.correction_labels;
+  if (raw.placeholder_labels) {
+    manifest.placeholder_labels = {
+      ...DEFAULT_PLACEHOLDER_LABELS,
+      ...raw.placeholder_labels,
+    };
   }
   return manifest;
 }

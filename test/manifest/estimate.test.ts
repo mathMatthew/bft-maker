@@ -146,13 +146,13 @@ describe("estimateTableRows", () => {
     };
     const result = estimateTableRows(manifest, manifest.bft_tables[0]);
     assert.equal(result.rows, 180000);
-    // salary has no propagation = reserve, needs correction rows
-    // One correction row per Professor value: 800
-    assert.equal(result.correction_row_count, 800);
+    // salary has no propagation = reserve, needs placeholder rows
+    // One per Professor value: 800
+    assert.equal(result.placeholder_row_count, 800);
     assert.equal(result.total, 180800);
   });
 
-  it("counts elimination as needing correction rows", () => {
+  it("counts elimination as needing placeholder rows", () => {
     const manifest: Manifest = {
       entities,
       relationships,
@@ -171,13 +171,12 @@ describe("estimateTableRows", () => {
       }],
     };
     const result = estimateTableRows(manifest, manifest.bft_tables[0]);
-    // class_budget elimination → correction rows for Class: 1200
-    // tuition_paid has no propagation but Student is home, needs correction if foreign entities exist
-    // Student has foreign entity (Class) and no propagation for tuition → correction rows for Student: 45000
-    assert.equal(result.correction_row_count, 1200 + 45000);
+    // class_budget elimination → placeholder rows for Class: 1200
+    // tuition_paid has no propagation, Student is home with foreign entity (Class) → placeholder rows for Student: 45000
+    assert.equal(result.placeholder_row_count, 1200 + 45000);
   });
 
-  it("no correction rows for single-entity table", () => {
+  it("no placeholder rows for single-entity table", () => {
     const manifest: Manifest = {
       entities,
       relationships,
@@ -190,7 +189,7 @@ describe("estimateTableRows", () => {
     };
     const result = estimateTableRows(manifest, manifest.bft_tables[0]);
     assert.equal(result.rows, 800);
-    assert.equal(result.correction_row_count, 0);
+    assert.equal(result.placeholder_row_count, 0);
     assert.equal(result.total, 800);
   });
 
@@ -224,7 +223,7 @@ describe("estimateTableRows", () => {
     assert.equal(result.rows, 100 + 50);
   });
 
-  it("propagation hops outside grain are ignored for correction counting", () => {
+  it("propagation hops outside grain are ignored for placeholder counting", () => {
     // tuition propagates Student → Class → Professor, but Professor
     // isn't in the grain — the hop to Professor is irrelevant.
     const manifest: Manifest = {
@@ -246,8 +245,8 @@ describe("estimateTableRows", () => {
       }],
     };
     const result = estimateTableRows(manifest, manifest.bft_tables[0]);
-    // The reserve hop to Professor is outside the grain — no correction row for it
-    assert.equal(result.correction_row_count, 0);
+    // The reserve hop to Professor is outside the grain — no placeholder rows for it
+    assert.equal(result.placeholder_row_count, 0);
   });
 });
 

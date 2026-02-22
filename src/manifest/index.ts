@@ -7,9 +7,9 @@ export type {
   MetricPropagation,
   BftTable,
   Strategy,
-  CorrectionLabels,
+  PlaceholderLabels,
 } from "./types.js";
-export { VALID_STRATEGIES, DEFAULT_CORRECTION_LABELS } from "./types.js";
+export { VALID_STRATEGIES, DEFAULT_PLACEHOLDER_LABELS } from "./types.js";
 
 export { validate } from "./validate.js";
 export type { ValidationError } from "./validate.js";

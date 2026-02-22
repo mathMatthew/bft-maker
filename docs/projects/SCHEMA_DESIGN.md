@@ -167,7 +167,7 @@ Example: tuition (Student) allocated to Class, reserve for Professor. In a Stude
 
 ### Elimination Direction Defaults
 
-"Eliminate across the entity with fewer instances" is a good heuristic — minimizes the reserve row correction magnitude. This is a wizard/UX suggestion, not a schema constraint. Computable from `estimated_rows`.
+"Eliminate across the entity with fewer instances" is a good heuristic — minimizes the offset magnitude on placeholder rows. This is a wizard/UX suggestion, not a schema constraint. Computable from `estimated_rows`.
 
 ### Shared Dimensions
 
@@ -225,22 +225,20 @@ If A's metric propagates A → B → C → D but the table only declares entitie
 
 This also resolves the reserve edge question and the "dimension-only entity" question (like Month with no metrics). Dimension-only entities enter the grain by being declared in the table's entities list — no need for dummy metrics.
 
-### 15. Correction Row Naming and Structure (Resolved)
+### 15. Placeholder Labels and Row Structure (Resolved)
 
-"Reserve row" was overloaded — used for the strategy, the correction mechanism, and the report label. Resolution:
+"Reserve row" was overloaded — used for the strategy, a row mechanism, and the report label. The concept is really about what value goes in an entity column when a metric isn't about that entity. Resolution:
 
-- **Correction row** is the umbrella term for rows that make SUMs correct
-- **Reserve row**: correction row for a reserve-strategy metric
-- **Elimination row**: correction row for an elimination-strategy metric
-- Both get configurable labels (default: `<Unallocated>`)
-- One correction row per entity VALUE, not per entity. Count = `entity.estimated_rows` for each entity needing corrections
+- **Placeholder label**: the value shown in an entity column when a metric on that row isn't about a specific entity (default `<Unallocated>`, configurable per strategy via `placeholder_labels` in the manifest)
+- Reserve and elimination both produce rows with placeholder labels: reserve rows carry the metric's value, elimination rows carry a negative offset
+- One row per entity VALUE, not per entity. Count = `entity.estimated_rows` for each entity with reserve or elimination metrics
 
 ## Current State
 
 **Done:**
 - types.ts updated to new schema (MetricPropagation, PropagationEdge replace MetricCluster, TraversalRule, ResolvedMetric)
 - validate.ts rewritten: propagation path validation (connected paths, no cycles, strategy constraints, empty path, duplicate table metrics)
-- estimate.ts rewritten: deriveGrainEntities() computes grain from propagation paths; independent chains detected and summed (UNION ALL) instead of cross-producted
+- estimate.ts rewritten: grain from declared entities; independent chains detected and summed (UNION ALL) instead of cross-producted
 - yaml.ts updated for new schema
 - 55 tests passing against new schema
 - Reference manifests: university (multi-hop allocation, elimination, sum_over_sum), northwind (allocation by quantity, sum_over_sum for price), university-ops (shared dimension, independent chains)

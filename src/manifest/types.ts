@@ -64,18 +64,18 @@ export interface BftTable {
 }
 
 /**
- * Labels for correction rows in generated output.
- * Correction rows make SUMs correct for reserve and elimination strategies.
- * Both default to "<Unallocated>".
+ * Labels for placeholder values in entity columns. When a metric's value
+ * appears on a row that isn't about a specific foreign entity, the foreign
+ * entity column shows this label. Both default to "<Unallocated>".
  */
-export interface CorrectionLabels {
-  reserve_label: string;
-  elimination_label: string;
+export interface PlaceholderLabels {
+  reserve?: string;
+  elimination?: string;
 }
 
-export const DEFAULT_CORRECTION_LABELS: CorrectionLabels = {
-  reserve_label: "<Unallocated>",
-  elimination_label: "<Unallocated>",
+export const DEFAULT_PLACEHOLDER_LABELS: Required<PlaceholderLabels> = {
+  reserve: "<Unallocated>",
+  elimination: "<Unallocated>",
 };
 
 export interface Manifest {
@@ -83,5 +83,5 @@ export interface Manifest {
   relationships: Relationship[];
   propagations: MetricPropagation[];
   bft_tables: BftTable[];
-  correction_labels?: CorrectionLabels;
+  placeholder_labels?: PlaceholderLabels;
 }

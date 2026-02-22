@@ -340,6 +340,36 @@ describe("validate", () => {
     });
   });
 
+  describe("unreachable metrics", () => {
+    it("warns when metric home entity is not in grain and has no path to grain", () => {
+      const m = validManifest();
+      // Add a table with only Student+Class but include salary (Professor metric)
+      // salary has no propagation, Professor not in grain → unreachable
+      m.bft_tables.push({
+        name: "no_professor",
+        entities: ["Student", "Class"],
+        metrics: ["tuition_paid", "salary"],
+      });
+      const errors = validate(m);
+      const warning = errors.find((e) => e.rule === "table-metric-unreachable" && e.message.includes("salary"));
+      assert.ok(warning);
+      assert.equal(warning!.severity, "warning");
+    });
+
+    it("no warning when metric reaches grain via propagation", () => {
+      const m = validManifest();
+      // tuition_paid propagates Student → Class → Professor
+      // Table has only Class and Professor (not Student) but tuition reaches both via propagation
+      m.bft_tables.push({
+        name: "class_professor",
+        entities: ["Class", "Professor"],
+        metrics: ["tuition_paid"],
+      });
+      const errors = validate(m);
+      assert.ok(!errors.some((e) => e.rule === "table-metric-unreachable" && e.message.includes("tuition_paid")));
+    });
+  });
+
   describe("multiple errors", () => {
     it("returns all errors at once", () => {
       const m = validManifest();

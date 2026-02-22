@@ -83,7 +83,7 @@ interface Manifest {
   relationships: Relationship[];
   propagations: MetricPropagation[];
   bft_tables: BftTable[];
-  correction_labels?: CorrectionLabels;
+  placeholder_labels?: PlaceholderLabels;
 }
 
 interface Entity {
@@ -140,13 +140,13 @@ interface BftTable {
 }
 
 /**
- * Optional labels for correction rows. When reserve or elimination
- * strategies produce correction rows, these labels identify them
- * in the entity columns.
+ * Labels for placeholder values in entity columns. When a metric's value
+ * appears on a row that isn't about a specific foreign entity, the foreign
+ * entity column shows this label. Both default to "<Unallocated>".
  */
-interface CorrectionLabels {
-  reserve_label: string;         // default: "<Unallocated>"
-  elimination_label: string;     // default: "<Unallocated>"
+interface PlaceholderLabels {
+  reserve?: string;              // default: "<Unallocated>"
+  elimination?: string;          // default: "<Unallocated>"
 }
 ```
 
@@ -181,7 +181,7 @@ Rules:
 - One M-M bridge: `relationship.estimated_links`
 - Two M-M bridges sharing a bridge entity: `links₁ × (links₂ / bridge.estimated_rows)`
 - Disconnected entities (no M-M connecting them): sum of row counts (sparse union)
-- Correction rows: `entity.estimated_rows` per entity needing corrections (reserve or elimination strategy metrics)
+- Placeholder rows: `entity.estimated_rows` per entity with reserve or elimination strategy metrics (rows where a foreign entity column shows a placeholder label)
 
 ### Table-level estimation with independent chains
 

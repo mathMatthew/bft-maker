@@ -57,7 +57,7 @@ propagations:
         weight: assignment_share
 
   # class_budget (Class) uses elimination toward Student — every student row
-  # shows the full class budget, reserve row cancels the overcount.
+  # shows the full class budget, a placeholder row cancels the overcount.
   # Does not propagate to Professor (reserve by default).
   - metric: class_budget
     path:

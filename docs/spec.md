@@ -55,19 +55,23 @@ There are three strategies for additive metrics and one pattern for non-additive
 
 ### Reserve
 
-The metric contributes nothing to foreign rows. Its full value is redirected to a correction row (e.g., `<Unallocated>`). The correction row label is configurable per table (default `<Unallocated>`). One correction row is emitted per entity value that needs correction, not per entity. The report shows the metric total in an isolated line, and entity-level rows show nothing for that metric.
+The metric shows its value only on rows where the home entity is present. Foreign entity columns on those rows display a placeholder label (default `<Unallocated>`) — the value isn't about any specific foreign entity. On all other rows, the metric is zero.
 
-`SUM` is safe as long as correction rows are included. Filtering them out drops the value entirely.
+Example: tuition (a Student metric) in a Student × Class table. Each student has a row with Class = `<Unallocated>` and their full tuition. Student × Class join rows show tuition = 0. Pivot by Student and you see each student's tuition naturally. Pivot by Class and the total sits on `<Unallocated>`.
 
-Reserve is the **default strategy** when no relationship exists between entities. It makes no assumptions about how a metric relates to foreign rows. It is the safe, assumption-free starting point.
+`SUM` is safe — every value appears exactly once. Filtering out rows with placeholder labels drops the metric's total.
+
+Reserve is the **default strategy**. It makes no assumptions about how a metric relates to foreign entities. It is the safe, assumption-free starting point.
 
 ### Elimination
 
-Every foreign row carries the full value. A negative offset on a correction row zeroes out the duplicates. The report shows the metric total on every row — useful when the number is context, not attribution — and `SUM` still returns the correct total because the correction row cancels the overcounting.
+The full metric value appears on every foreign row. Since this overcounts, the output includes rows where the foreign entity column shows a placeholder label and the metric carries a negative value that cancels the extra copies.
 
-`SUM` is safe as long as correction rows are included. Filtering them out produces a multiple of the true total.
+Example: class_budget (a Class metric) with elimination toward Student. Every Student × Class row shows the full class budget — useful when the number is context, not attribution. Each class also has a row with Student = `<Unallocated>` carrying a negative offset so that `SUM(class_budget)` returns the true total.
 
-Elimination is useful when users want to see a reference number alongside their own entity's detail. "Every employee in the Southwest can see that the region did $2M in revenue" — the $2M appears on every row, and the sum at the bottom still says $2M.
+`SUM` is safe as long as rows with placeholder labels are included. Filtering them out produces a multiple of the true total.
+
+Elimination is useful when users want to see a reference number alongside foreign detail. "Every employee in the Southwest can see that the region did $2M in revenue" — the $2M appears on every row, and the sum at the bottom still says $2M.
 
 ### Allocation
 
@@ -171,7 +175,7 @@ Cardinalities are declared upfront so the system can estimate output table sizes
 
 *For each metric that isn't staying on its own rows (reserve), how does it spread to other entities, and what does it mean when it gets there?*
 
-Every metric starts as **reserve** — it contributes nothing to foreign rows and its total lives on a correction row. Reserve is the safe, assumption-free default. No propagation path needs to be declared for it.
+Every metric starts as **reserve** — its value stays with the home entity, showing zero on foreign rows. Reserve is the safe, assumption-free default. No propagation path needs to be declared for it.
 
 The user upgrades metrics away from reserve one at a time:
 
@@ -247,7 +251,7 @@ Table: department_financial
   Entities: [Student, Class, Professor]
   Metrics: [tuition_paid, class_budget, salary]
   Grain: Student × Class × Professor (from declared entities)
-  Estimated rows: ~180,000 + correction rows
+  Estimated rows: ~180,000
 
 Table: student_experience
   Entities: [Student, Class]
@@ -268,7 +272,7 @@ If merging tables would produce millions of rows, the user sees that cost before
 
 #### Simplification Suggestions
 
-Before the user commits to a topology, score every decision made in Phases A and B by its cost to the output — row count, column count, correction row complexity, number of allocation weights, and sparsity. Present the **top 5 simplifications** that would most reduce the cost of the final table(s).
+Before the user commits to a topology, score every decision made in Phases A and B by its cost to the output — row count, column count, number of allocation weights, and sparsity. Present the **top 5 simplifications** that would most reduce the cost of the final table(s).
 
 Each suggestion is a specific, reversible change to a Phase A or Phase B decision, paired with a concrete description of what it saves and what it sacrifices.
 
@@ -284,8 +288,8 @@ Suggested simplifications for: financial_overview
 2. Move salary to Reserve instead of Allocation (Phase B)
    Save: Eliminates salary allocation weights and removes
          the need for the Assignment relationship entirely.
-   Cost: Salary appears only on correction rows, not attributable
-         to individual classes or students.
+   Cost: Salary is no longer attributable to individual classes
+         or students — it stays at the Professor level.
    Changes: If no other metric needs Professor, this also
             enables simplification #1.
 
@@ -297,7 +301,8 @@ Suggested simplifications for: financial_overview
 4. Downgrade class_budget from Allocation to Elimination (Phase B)
    Save: Removes enrollment_count weighting. Simpler column.
    Cost: Every student row shows the full class budget instead
-         of their share. Correction row required to correct the sum.
+         of their share. Rows with placeholder labels carry offsets
+         to keep `SUM` correct.
 
 5. Roll up Student detail for financial_overview (Phase A)
    Save: ~179,000 rows. Table collapses to ~1,800 rows
@@ -361,7 +366,7 @@ SELECT *,
 FROM base_grain
 ```
 
-**Elimination** — a union with a negating correction row:
+**Elimination** — the full value on every row, with a negating offset to keep `SUM` correct:
 ```sql
 SELECT *, class_budget AS class_budget_elim FROM base_grain
 UNION ALL
@@ -384,8 +389,8 @@ The generator produces a DAG of independent steps — one per metric-strategy pa
 Every assertion is derivable directly from the manifest with no additional input:
 
 - **Allocation metrics:** `SUM(allocated) == SUM(original)` for every entity group.
-- **Elimination metrics:** `SUM including correction rows == expected total` and `SUM excluding correction rows == expected overcounted total`.
-- **Reserve metrics:** `SUM including correction rows == expected total` and value appears only on correction rows.
+- **Elimination metrics:** Total `SUM` matches expected. Excluding rows with placeholder labels produces the expected overcounted total.
+- **Reserve metrics:** Total `SUM` matches expected. Metric value is zero on all rows without placeholder labels.
 - **Sum / Sum metrics:** Weights sum to expected value per entity (typically 1.0).
 - **Row counts:** Actual output rows match estimated rows within a tolerance band.
 
@@ -416,12 +421,12 @@ output/
 | Column Type | Safe to SUM? | Condition |
 |---|---|---|
 | Allocated metric | Yes | Always correct for any slice |
-| Elimination metric | Yes | Correction rows must be included |
-| Reserve metric | Yes | Correction rows must be included |
+| Elimination metric | Yes | Rows with placeholder labels must be included |
+| Reserve metric | Yes | Rows with placeholder labels must be included |
 | Sum / Sum metric | No | Must use `SUM(weighted) / SUM(weight)` |
 | Count column | Depends | Follows the same rules as its assigned strategy |
 
-Correction rows (labeled `<Unallocated>` by default, configurable per table) must be present in any aggregation that uses Elimination or Reserve strategy columns. Report filters that exclude these rows will silently produce wrong numbers. All such columns carry a persistent flag in the output schema indicating this dependency.
+Some entity columns contain placeholder labels (default `<Unallocated>`, configurable per manifest). These appear on rows where a metric's value isn't attributed to a specific entity — for example, a student's tuition appears on a row where the Class column is `<Unallocated>` because tuition isn't about any specific class. For elimination and reserve metrics, filtering out rows with placeholder labels will silently produce wrong sums. All such columns carry a persistent flag in the output schema indicating this dependency.
 
 ---
 

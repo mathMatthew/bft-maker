@@ -7,8 +7,8 @@ Implement the code generator that takes a validated manifest and produces execut
 - Build planner (src/codegen/planner.ts): manifest → ordered build steps
 - SQL templates for each strategy:
   - allocation.ts — window function with weight distribution
-  - elimination.ts — full value + negating reserve row
-  - reserve.ts — value on reserve row only, NULL on foreign rows
+  - elimination.ts — full value on foreign rows + negating offset on placeholder rows
+  - reserve.ts — value on placeholder rows only, zero on foreign rows
   - sum-over-sum.ts — raw value + companion weight column
   - join.ts — base grain join and final assembly
   - validation.ts — assertion queries (zero rows = pass)
