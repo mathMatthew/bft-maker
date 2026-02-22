@@ -48,6 +48,7 @@ function universityManifest(): Manifest {
     bft_tables: [
       {
         name: "student_experience",
+        entities: ["Student", "Class"],
         metrics: ["tuition_paid", "satisfaction_score"],
       },
     ],
@@ -110,5 +111,25 @@ relationships: []
     assert.throws(() => parseManifest("just a string"), {
       message: /Invalid manifest/,
     });
+  });
+
+  it("parses placeholder_labels with defaults for missing fields", () => {
+    const yaml = `
+entities: []
+placeholder_labels:
+  reserve: "<N/A>"
+`;
+    const parsed = parseManifest(yaml);
+    assert.equal(parsed.placeholder_labels?.reserve, "<N/A>");
+    assert.equal(parsed.placeholder_labels?.elimination, "<Unallocated>");
+  });
+
+  it("round-trips placeholder_labels", () => {
+    const original = universityManifest();
+    original.placeholder_labels = { reserve: "<Reserve>", elimination: "<Offset>" };
+    const yaml = serializeManifest(original);
+    const parsed = parseManifest(yaml);
+    assert.equal(parsed.placeholder_labels?.reserve, "<Reserve>");
+    assert.equal(parsed.placeholder_labels?.elimination, "<Offset>");
   });
 });

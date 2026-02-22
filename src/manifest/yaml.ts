@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as yaml from "js-yaml";
 import type { Manifest } from "./types.js";
+import { DEFAULT_PLACEHOLDER_LABELS } from "./types.js";
 
 /**
  * Parse a YAML string into a Manifest. The result is structurally unvalidated —
@@ -15,12 +16,19 @@ export function parseManifest(yamlString: string): Manifest {
   if (!raw || typeof raw !== "object") {
     throw new Error("Invalid manifest: expected a YAML object");
   }
-  return {
+  const manifest: Manifest = {
     entities: raw.entities ?? [],
     relationships: raw.relationships ?? [],
     propagations: raw.propagations ?? [],
     bft_tables: raw.bft_tables ?? [],
   };
+  if (raw.placeholder_labels) {
+    manifest.placeholder_labels = {
+      ...DEFAULT_PLACEHOLDER_LABELS,
+      ...raw.placeholder_labels,
+    };
+  }
+  return manifest;
 }
 
 export function serializeManifest(manifest: Manifest): string {

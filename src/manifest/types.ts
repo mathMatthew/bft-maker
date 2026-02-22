@@ -52,17 +52,36 @@ export interface MetricPropagation {
 }
 
 /**
- * A BFT table. Grain is derived from the union of all entities
- * across all included metrics' propagation paths.
+ * A BFT table. The user declares which entities and metrics to include.
+ * Entities determine the grain (what a row represents). Metrics determine
+ * what values appear on each row. Propagation paths describe what each
+ * metric means on foreign entity rows — they don't determine the grain.
  */
 export interface BftTable {
   name: string;
+  entities: string[];
   metrics: string[];
 }
+
+/**
+ * Labels for placeholder values in entity columns. When a metric's value
+ * appears on a row that isn't about a specific foreign entity, the foreign
+ * entity column shows this label. Both default to "<Unallocated>".
+ */
+export interface PlaceholderLabels {
+  reserve?: string;
+  elimination?: string;
+}
+
+export const DEFAULT_PLACEHOLDER_LABELS: Required<PlaceholderLabels> = {
+  reserve: "<Unallocated>",
+  elimination: "<Unallocated>",
+};
 
 export interface Manifest {
   entities: Entity[];
   relationships: Relationship[];
   propagations: MetricPropagation[];
   bft_tables: BftTable[];
+  placeholder_labels?: PlaceholderLabels;
 }

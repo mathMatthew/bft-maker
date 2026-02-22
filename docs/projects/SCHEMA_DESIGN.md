@@ -167,7 +167,7 @@ Example: tuition (Student) allocated to Class, reserve for Professor. In a Stude
 
 ### Elimination Direction Defaults
 
-"Eliminate across the entity with fewer instances" is a good heuristic — minimizes the reserve row correction magnitude. This is a wizard/UX suggestion, not a schema constraint. Computable from `estimated_rows`.
+"Eliminate across the entity with fewer instances" is a good heuristic — minimizes the offset magnitude on placeholder rows. This is a wizard/UX suggestion, not a schema constraint. Computable from `estimated_rows`.
 
 ### Shared Dimensions
 
@@ -210,34 +210,40 @@ Two entities with no relationship at all can share a table with all-reserve metr
 
 **Note:** Finding 12 (overlapping chains) generalizes this: unrelated entities are the extreme case where chains share zero entities. The same UNION ALL logic applies.
 
-## Open Questions
+### 14. Do Intermediate Entities Belong in the Grain? (Resolved)
 
-### 14. Do Intermediate Entities Belong in the Grain?
+**Resolution:** The grain is declared explicitly on the table via an `entities` field. The table declares both which entities and which metrics to include — two independent decisions. Propagation paths describe what metrics mean on foreign rows; they don't determine the grain.
 
-Currently, `deriveGrainEntities` puts every entity in a metric's propagation path into the grain. If A's metric propagates A → B → C → D, the grain includes {A, B, C, D}. You can't get an A × D table — B and C are forced in.
+```yaml
+bft_tables:
+  - name: department_financial
+    entities: [Student, Class, Professor]
+    metrics: [tuition_paid, class_budget, salary]
+```
 
-But B and C might only be *routing* — the codegen joins through them to compute allocation weights, but the user doesn't want B and C as row dimensions in the output. The codegen could join A-B-C-D, compute the allocation, then GROUP BY (A, D), collapsing B and C out of the result.
+If A's metric propagates A → B → C → D but the table only declares entities [A, D], the grain is {A, D}. The codegen joins through B and C to compute allocation weights, then collapses them out. Hops in the propagation path only activate when the target entity is in the declared grain.
 
-This means the propagation path might describe the *calculation route* (which relationships to join for weight computation) separately from the *grain* (which entities get their own rows). If so, the grain would be a table-level decision, not automatically derived from propagation paths.
+This also resolves the reserve edge question and the "dimension-only entity" question (like Month with no metrics). Dimension-only entities enter the grain by being declared in the table's entities list — no need for dummy metrics.
 
-**Related question: reserve edges in propagation paths.** A reserve edge (e.g., A → B with strategy "reserve") currently forces B into the grain. If B is already in the grain from its own metric, the reserve edge is redundant — B gets reserve treatment by default. If B isn't otherwise in the grain, the reserve edge's only effect is forcing B in. Whether that's useful or a design smell depends on whether intermediate entities should be in the grain at all.
+### 15. Placeholder Labels and Row Structure (Resolved)
 
-**Resolution:** defer to codegen. When we write the SQL for multi-hop allocation, it will become clear whether intermediate entities must be grain dimensions or whether they can be collapsed. Build simple test data (e.g., 4-entity chain with known values), write the SQL both ways, and compare results.
+"Reserve row" was overloaded — used for the strategy, a row mechanism, and the report label. The concept is really about what value goes in an entity column when a metric isn't about that entity. Resolution:
+
+- **Placeholder label**: the value shown in an entity column when a metric on that row isn't about a specific entity (default `<Unallocated>`, configurable per strategy via `placeholder_labels` in the manifest)
+- Reserve and elimination both produce rows with placeholder labels: reserve rows carry the metric's value, elimination rows carry a negative offset
+- One row per entity VALUE, not per entity. Count = `entity.estimated_rows` for each entity with reserve or elimination metrics
 
 ## Current State
 
 **Done:**
 - types.ts updated to new schema (MetricPropagation, PropagationEdge replace MetricCluster, TraversalRule, ResolvedMetric)
 - validate.ts rewritten: propagation path validation (connected paths, no cycles, strategy constraints, empty path, duplicate table metrics)
-- estimate.ts rewritten: deriveGrainEntities() computes grain from propagation paths; independent chains detected and summed (UNION ALL) instead of cross-producted
+- estimate.ts rewritten: grain from declared entities; independent chains detected and summed (UNION ALL) instead of cross-producted
 - yaml.ts updated for new schema
 - 55 tests passing against new schema
 - Reference manifests: university (multi-hop allocation, elimination, sum_over_sum), northwind (allocation by quantity, sum_over_sum for price), university-ops (shared dimension, independent chains)
 - spec.md and system-design.md updated to match new schema
 - PR #2 open for review
-
-**Open:**
-- Finding 14: do intermediate propagation entities belong in the grain? (deferred to codegen)
 
 **Not done:**
 - P2 (codegen) blocked until schema stabilizes

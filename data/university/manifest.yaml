@@ -57,7 +57,7 @@ propagations:
         weight: assignment_share
 
   # class_budget (Class) uses elimination toward Student — every student row
-  # shows the full class budget, reserve row cancels the overcount.
+  # shows the full class budget, a placeholder row cancels the overcount.
   # Does not propagate to Professor (reserve by default).
   - metric: class_budget
     path:
@@ -78,15 +78,15 @@ propagations:
         weight: satisfaction_weight
 
 bft_tables:
-  # Full grain: Student × Class × Professor
-  # Includes tuition (allocated through both hops), class_budget (eliminated
-  # toward students), salary (reserve). satisfaction_score not included here
-  # because its path doesn't reach Professor.
+  # Student × Class × Professor
+  # tuition (allocated through both hops), class_budget (eliminated
+  # toward students), salary (reserve).
   - name: department_financial
+    entities: [Student, Class, Professor]
     metrics: [tuition_paid, class_budget, salary]
 
-  # Grain: Student × Class (satisfaction propagates to Class, class_budget
-  # eliminates toward Student). Excludes tuition_paid because its multi-hop
-  # path would pull Professor into the grain.
+  # Student × Class only — tuition's path to Professor is unused
+  # because Professor isn't in this table's entities.
   - name: student_experience
-    metrics: [satisfaction_score, class_budget]
+    entities: [Student, Class]
+    metrics: [tuition_paid, satisfaction_score, class_budget]

@@ -6,6 +6,7 @@ export interface ValidationError {
   rule: string;
   message: string;
   path?: string;
+  severity?: "error" | "warning";
 }
 
 export function validate(manifest: Manifest): ValidationError[] {
@@ -21,7 +22,9 @@ export function validate(manifest: Manifest): ValidationError[] {
   checkPositiveCardinalities(manifest, errors);
   checkRelationshipEntities(manifest, entityMap, errors);
   checkPropagations(manifest, entityMap, metricOwner, relationshipNames, errors);
+  checkTableEntities(manifest, entityMap, errors);
   checkTableMetrics(manifest, metricOwner, errors);
+  checkUnreachableMetrics(manifest, metricOwner, errors);
 
   return errors;
 }
@@ -264,8 +267,45 @@ function checkPropagations(
   }
 }
 
+// Rule: All entity names referenced in tables must exist
+function checkTableEntities(
+  manifest: Manifest,
+  entityMap: Map<string, Entity>,
+  errors: ValidationError[]
+): void {
+  for (const table of manifest.bft_tables) {
+    if (!Array.isArray(table.entities) || table.entities.length === 0) {
+      errors.push({
+        rule: "table-entities-nonempty",
+        message: `Table "${table.name}" must declare at least one entity`,
+        path: `bft_tables.${table.name}.entities`,
+      });
+      continue;
+    }
+
+    const seen = new Set<string>();
+    for (const entityName of table.entities) {
+      if (seen.has(entityName)) {
+        errors.push({
+          rule: "table-entity-unique",
+          message: `Table "${table.name}" lists entity "${entityName}" more than once`,
+          path: `bft_tables.${table.name}.entities`,
+        });
+      }
+      seen.add(entityName);
+
+      if (!entityMap.has(entityName)) {
+        errors.push({
+          rule: "table-entity-exists",
+          message: `Table "${table.name}" references nonexistent entity "${entityName}"`,
+          path: `bft_tables.${table.name}.entities.${entityName}`,
+        });
+      }
+    }
+  }
+}
+
 // Rule: All metric names referenced in tables must exist on some entity.
-// Note: empty metrics list is valid — a table may exist for dimensions/joins only.
 function checkTableMetrics(
   manifest: Manifest,
   metricOwner: Map<string, Entity>,
@@ -288,6 +328,40 @@ function checkTableMetrics(
           rule: "table-metric-exists",
           message: `Table "${table.name}" references nonexistent metric "${metricName}"`,
           path: `bft_tables.${table.name}.metrics.${metricName}`,
+        });
+      }
+    }
+  }
+}
+
+// Warning: A metric whose home entity isn't in the grain and whose propagation
+// path doesn't reach any grain entity contributes nothing to the table.
+function checkUnreachableMetrics(
+  manifest: Manifest,
+  metricOwner: Map<string, Entity>,
+  errors: ValidationError[]
+): void {
+  const propMap = new Map(manifest.propagations.map((p) => [p.metric, p]));
+
+  for (const table of manifest.bft_tables) {
+    const grainSet = new Set(table.entities);
+
+    for (const metricName of table.metrics) {
+      const owner = metricOwner.get(metricName);
+      if (!owner) continue; // caught by checkTableMetrics
+
+      if (grainSet.has(owner.name)) continue; // home entity in grain, metric is reachable
+
+      // Home entity not in grain — check if any propagation hop targets a grain entity
+      const prop = propMap.get(metricName);
+      const reachesGrain = prop?.path.some((edge) => grainSet.has(edge.target_entity)) ?? false;
+
+      if (!reachesGrain) {
+        errors.push({
+          rule: "table-metric-unreachable",
+          message: `Table "${table.name}": metric "${metricName}" (owned by ${owner.name}) has no path to any entity in the table — it will contribute nothing`,
+          path: `bft_tables.${table.name}.metrics.${metricName}`,
+          severity: "warning",
         });
       }
     }

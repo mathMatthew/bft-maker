@@ -52,4 +52,5 @@ propagations:
 
 bft_tables:
   - name: order_product
+    entities: [Order, Product]
     metrics: [freight, unit_price, units_in_stock]
