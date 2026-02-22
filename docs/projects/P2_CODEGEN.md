@@ -101,8 +101,13 @@ Reference SQL lives in `data/university/sql/`:
 All 15 validations pass.
 
 ## Status
-Phase 2 in progress. Core generator working — produces correct SQL from the university
-manifest with all 4 strategies. Remaining Phase 2 items:
-- Snapshot tests (compare generator output to reference SQL)
-- Data path should be configurable (currently hardcoded to data/university/)
-- Clean up empty stub directories (src/codegen/dialects/, src/codegen/sql/)
+Phase 2 complete. Generator produces correct DuckDB SQL from the university manifest.
+
+Implemented:
+- Planner: manifest → TablePlan (join chains, strategy classification, weights)
+- Generator: TablePlan → SQL strings (base join, weights, UNION ALL assembly, validation)
+- Emitter: SQL strings → numbered files
+- All 4 strategies: allocation (incl. multi-hop), elimination, reserve, sum_over_sum
+- Mixed elimination+reserve interaction for 3-entity tables
+- DuckDB integration tests: generated SQL → DuckDB → all validations pass
+- 69 tests total (9 codegen)
