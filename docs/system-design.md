@@ -181,7 +181,7 @@ Rules:
 - One M-M bridge: `relationship.estimated_links`
 - Two M-M bridges sharing a bridge entity: `links₁ × (links₂ / bridge.estimated_rows)`
 - Disconnected entities (no M-M connecting them): sum of row counts (sparse union)
-- Placeholder rows: `entity.estimated_rows` per entity with reserve or elimination strategy metrics (rows where a foreign entity column shows a placeholder label)
+- Placeholder rows: `entity.estimated_rows` per entity with reserve or elimination strategy metrics. Reserve and elimination need the same count — whether you zero-out and add or repeat and subtract, one row per entity value is required to keep `SUM` correct. If two entities each reserve/eliminate toward each other, both entities' row counts contribute to the placeholder total.
 
 ### Table-level estimation with independent chains
 

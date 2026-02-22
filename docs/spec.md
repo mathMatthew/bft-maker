@@ -89,6 +89,14 @@ Average = SUM(weighted_metric) / SUM(entity_weight)
 
 Report authors must use this pattern. Native `AVERAGE` will produce wrong results.
 
+### Placeholder Rows at the Table Level
+
+Reserve and elimination both produce placeholder rows — rows where a foreign entity column shows a placeholder label (default `<Unallocated>`). The count is the same for both strategies: one row per value of the metric's home entity. Whether you zero-out and add (reserve) or repeat and subtract (elimination), the math requires the same number of rows to keep `SUM` correct.
+
+At the table level, this means: if two entities each have metrics that are reserve (or elimination) toward the other, the table's placeholder rows are both entities' row counts added together. A Student × Class table where tuition is reserve for Class and class_budget is reserve for Student gets 45,000 placeholder rows (one per student) plus 1,200 placeholder rows (one per class) = 46,200 placeholder rows on top of the 120,000 join rows. Each placeholder row carries one entity's metric value with the other entity's column set to `<Unallocated>`.
+
+Allocation is the only strategy that avoids placeholder rows entirely — it distributes values across the existing join rows.
+
 ---
 
 ## Counting
