@@ -1,5 +1,8 @@
 import { describe, it } from "node:test";
 import * as assert from "node:assert/strict";
+import { execSync } from "node:child_process";
+import { writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { loadManifest } from "../../src/manifest/yaml.js";
 import { generate } from "../../src/codegen/generator.js";
 import { defaultSourceMapping, planTable } from "../../src/codegen/planner.js";
@@ -65,7 +68,7 @@ describe("generator", () => {
   const manifest = loadManifest("data/university/manifest.yaml");
 
   it("generates SQL for all tables", () => {
-    const output = generate(manifest);
+    const output = generate(manifest, { dataDir: "data/university" });
 
     assert.ok(output.loadDataSQL.includes("CREATE OR REPLACE TABLE students"));
     assert.ok(output.loadDataSQL.includes("CREATE OR REPLACE TABLE enrollments"));
@@ -92,8 +95,89 @@ describe("generator", () => {
   });
 
   it("generates valid run script", () => {
-    const output = generate(manifest);
+    const output = generate(manifest, { dataDir: "data/university" });
     assert.ok(output.runScript.includes("#!/bin/bash"));
     assert.ok(output.runScript.includes("duckdb"));
+  });
+});
+
+describe("generator DuckDB integration", () => {
+  const manifest = loadManifest("data/university/manifest.yaml");
+  const output = generate(manifest, { dataDir: "data/university" });
+
+  const tmpDir = join(process.cwd(), ".tmp-test-codegen");
+
+  // Write SQL to temp files and run through DuckDB via Python
+  function runSQL(sqlParts: string[]): string {
+    mkdirSync(tmpDir, { recursive: true });
+    const sqlPath = join(tmpDir, "combined.sql");
+    writeFileSync(sqlPath, sqlParts.join("\n\n"));
+
+    const pyScript = join(tmpDir, "run.py");
+    writeFileSync(pyScript, `
+import duckdb, json
+con = duckdb.connect()
+sql = open("${sqlPath}").read()
+results = []
+for stmt in [s.strip() for s in sql.split(';') if s.strip()]:
+    lines = [l for l in stmt.split('\\n') if l.strip() and not l.strip().startswith('--')]
+    if not lines: continue
+    result = con.execute(stmt)
+    if lines[0].strip().split()[0].upper() == 'SELECT':
+        cols = [d[0] for d in result.description]
+        for row in result.fetchall():
+            results.append(dict(zip(cols, [str(v) for v in row])))
+print(json.dumps(results))
+`);
+    const out = execSync(`python3 ${pyScript}`, {
+      encoding: "utf-8",
+      cwd: process.cwd(),
+    });
+    rmSync(tmpDir, { recursive: true, force: true });
+    return out;
+  }
+
+  it("all validations pass for department_financial", () => {
+    const df = output.tables.find((t) => t.name === "department_financial")!;
+    const raw = runSQL([output.loadDataSQL, df.sql]);
+    const results = JSON.parse(raw) as { test: string; result: string }[];
+    for (const r of results) {
+      assert.ok(r.result.includes("PASS"), `${r.test}: ${r.result}`);
+    }
+    assert.ok(results.length >= 3, `Expected at least 3 validation checks, got ${results.length}`);
+  });
+
+  it("all validations pass for student_experience", () => {
+    const se = output.tables.find((t) => t.name === "student_experience")!;
+    const raw = runSQL([output.loadDataSQL, se.sql]);
+    const results = JSON.parse(raw) as { test: string; result: string }[];
+    for (const r of results) {
+      assert.ok(r.result.includes("PASS"), `${r.test}: ${r.result}`);
+    }
+    assert.ok(results.length >= 3, `Expected at least 3 validation checks, got ${results.length}`);
+  });
+
+  it("department_financial has 218 rows", () => {
+    const df = output.tables.find((t) => t.name === "department_financial")!;
+    const raw = runSQL([
+      output.loadDataSQL,
+      df.sql,
+      "SELECT CAST(COUNT(*) AS VARCHAR) AS cnt FROM department_financial",
+    ]);
+    const results = JSON.parse(raw) as Record<string, string>[];
+    const countResult = results.find((r) => r.cnt !== undefined);
+    assert.equal(countResult?.cnt, "218");
+  });
+
+  it("student_experience has 100 rows", () => {
+    const se = output.tables.find((t) => t.name === "student_experience")!;
+    const raw = runSQL([
+      output.loadDataSQL,
+      se.sql,
+      "SELECT CAST(COUNT(*) AS VARCHAR) AS cnt FROM student_experience",
+    ]);
+    const results = JSON.parse(raw) as Record<string, string>[];
+    const countResult = results.find((r) => r.cnt !== undefined);
+    assert.equal(countResult?.cnt, "100");
   });
 });

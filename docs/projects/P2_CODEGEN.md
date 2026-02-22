@@ -101,4 +101,8 @@ Reference SQL lives in `data/university/sql/`:
 All 15 validations pass.
 
 ## Status
-Phase 1 complete. Next: Phase 2 (build the generator).
+Phase 2 in progress. Core generator working — produces correct SQL from the university
+manifest with all 4 strategies. Remaining Phase 2 items:
+- Snapshot tests (compare generator output to reference SQL)
+- Data path should be configurable (currently hardcoded to data/university/)
+- Clean up empty stub directories (src/codegen/dialects/, src/codegen/sql/)
