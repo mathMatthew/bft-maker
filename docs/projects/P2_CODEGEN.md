@@ -17,17 +17,16 @@ Deliverables:
 ### Phase 2: Build the generator
 Mechanically reproduce the hand-written SQL from Phase 1. The generator reads a manifest and emits the same SQL patterns.
 
-- Build planner (src/codegen/planner.ts): manifest → ordered build steps
-- SQL templates for each strategy:
-  - allocation.ts — window function with weight distribution
-  - elimination.ts — full value on foreign rows + negating offset on placeholder rows
-  - reserve.ts — value on placeholder rows only, zero on foreign rows
-  - sum-over-sum.ts — raw value + companion weight column
-  - join.ts — base grain join and final assembly
-  - validation.ts — assertion queries (zero rows = pass)
-- DuckDB dialect (src/codegen/dialects/duckdb.ts)
+- Planner (src/codegen/planner.ts): manifest → table plans with join chains and strategy classification
+- Generator (src/codegen/generator.ts): table plans → SQL strings
+  - Allocation — divide metric value across combination rows using window function shares
+  - Elimination — full value on combination rows, correction rows with negative offset
+  - Reserve — metric value on home entity rows, zero on combination rows
+  - Sum/Sum — raw value preserved, companion weight column for correct averaging
+  - Base join assembly and UNION ALL composition
+  - Validation queries (zero rows = pass)
 - File emitter (src/codegen/emit.ts): writes numbered .sql files + run.sh
-- Snapshot tests: generator output matches the hand-written SQL from Phase 1
+- DuckDB integration tests: generated SQL executes and all validations pass
 
 ## Dependencies
 - Requires Project 3 (manifest types + validation) — done
@@ -101,7 +100,7 @@ Reference SQL lives in `data/university/sql/`:
 All 15 validations pass.
 
 ## Status
-Phase 2 complete. Generator produces correct DuckDB SQL from the university manifest.
+Complete. PR review pending.
 
 Implemented:
 - Planner: manifest → TablePlan (join chains, strategy classification, weights)
@@ -111,3 +110,5 @@ Implemented:
 - Mixed elimination+reserve interaction for 3-entity tables
 - DuckDB integration tests: generated SQL → DuckDB → all validations pass
 - 69 tests total (9 codegen)
+
+Next step: PR review (fresh context window).
