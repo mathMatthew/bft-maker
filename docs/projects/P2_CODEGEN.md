@@ -111,4 +111,4 @@ Implemented:
 - DuckDB integration tests: generated SQL → DuckDB → all validations pass
 - 69 tests total (9 codegen)
 
-Next step: PR review (fresh context window).
+Next step: PR review (fresh context window). PR: #4
