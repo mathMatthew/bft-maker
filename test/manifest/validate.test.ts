@@ -370,6 +370,107 @@ describe("validate", () => {
     });
   });
 
+  describe("relationship metrics", () => {
+    it("catches duplicate metric across entity and relationship", () => {
+      const m = validManifest();
+      m.relationships[0].metrics = [
+        { name: "tuition_paid", type: "currency", nature: "additive" },
+      ];
+      const errors = validate(m);
+      assert.ok(errors.some((e) => e.rule === "no-duplicates" && e.message.includes("tuition_paid")));
+    });
+
+    it("accepts unique relationship metric", () => {
+      const m = validManifest();
+      m.relationships[0].metrics = [
+        { name: "enrollment_grade", type: "float", nature: "additive" },
+      ];
+      const errors = validate(m);
+      assert.ok(!errors.some((e) => e.rule === "no-duplicates" && e.message.includes("enrollment_grade")));
+    });
+
+    it("finds relationship metrics in propagation validation", () => {
+      const m = validManifest();
+      m.relationships[0].metrics = [
+        { name: "enrollment_grade", type: "float", nature: "additive" },
+      ];
+      // enrollment_grade lives on Enrollment (Student×Class),
+      // propagation to Professor via Assignment should be valid
+      m.propagations.push({
+        metric: "enrollment_grade",
+        path: [
+          { relationship: "Assignment", target_entity: "Professor", strategy: "allocation", weight: "assignment_share" },
+        ],
+      });
+      m.bft_tables[0].metrics.push("enrollment_grade");
+      const errors = validate(m);
+      // Should not have "metric not found" or "propagation-metric-exists" errors
+      assert.ok(!errors.some((e) => e.rule === "propagation-metric-exists" && e.message.includes("enrollment_grade")));
+      assert.ok(!errors.some((e) => e.rule === "table-metric-exists" && e.message.includes("enrollment_grade")));
+    });
+
+    it("validates relationship metric propagation connectivity", () => {
+      const m = validManifest();
+      m.relationships[0].metrics = [
+        { name: "enrollment_grade", type: "float", nature: "additive" },
+      ];
+      // enrollment_grade on Enrollment (Student×Class), try to propagate
+      // via Enrollment itself — should fail (Enrollment connects Student-Class,
+      // and both are already in home grain, so target must be a new entity)
+      m.propagations.push({
+        metric: "enrollment_grade",
+        path: [
+          { relationship: "Enrollment", target_entity: "Professor", strategy: "allocation", weight: "w" },
+        ],
+      });
+      const errors = validate(m);
+      assert.ok(errors.some((e) => e.rule === "propagation-path-connected"));
+    });
+  });
+
+  describe("summarization validity", () => {
+    it("rejects elimination at summarization boundary", () => {
+      const m = validManifest();
+      // tuition_paid (Student) propagates to Class via allocation, then to Professor.
+      // Table with grain {Class, Professor} — Student must be summarized out.
+      // Change the Student→Class strategy to elimination, which can't be summarized.
+      m.propagations = m.propagations.filter((p) => p.metric !== "tuition_paid");
+      m.propagations.push({
+        metric: "tuition_paid",
+        path: [
+          { relationship: "Enrollment", target_entity: "Class", strategy: "elimination" },
+          { relationship: "Assignment", target_entity: "Professor", strategy: "allocation", weight: "w" },
+        ],
+      });
+      m.bft_tables.push({
+        name: "class_professor",
+        entities: ["Class", "Professor"],
+        metrics: ["tuition_paid"],
+      });
+      const errors = validate(m);
+      assert.ok(errors.some((e) => e.rule === "summarization-strategy" && e.message.includes("tuition_paid")));
+    });
+
+    it("accepts allocation at summarization boundary", () => {
+      const m = validManifest();
+      // Table with grain {Class, Professor} — Student summarized out via allocation. OK.
+      m.bft_tables.push({
+        name: "class_professor",
+        entities: ["Class", "Professor"],
+        metrics: ["tuition_paid"],
+      });
+      const errors = validate(m);
+      assert.ok(!errors.some((e) => e.rule === "summarization-strategy" && e.message.includes("tuition_paid")));
+    });
+
+    it("no summarization error when home entity is in grain", () => {
+      const m = validManifest();
+      // tuition_paid home=Student, table has Student in grain — no summarization needed
+      const errors = validate(m);
+      assert.ok(!errors.some((e) => e.rule === "summarization-strategy"));
+    });
+  });
+
   describe("multiple errors", () => {
     it("returns all errors at once", () => {
       const m = validManifest();

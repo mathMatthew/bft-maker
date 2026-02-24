@@ -26,6 +26,7 @@ export function validate(manifest: Manifest): ValidationError[] {
   checkTableEntities(manifest, entityMap, errors);
   checkTableMetrics(manifest, metricHome, errors);
   checkUnreachableMetrics(manifest, metricHome, errors);
+  checkSummarizationValidity(manifest, metricHome, errors);
 
   return errors;
 }
@@ -376,6 +377,49 @@ function checkUnreachableMetrics(
           path: `bft_tables.${table.name}.metrics.${metricName}`,
           severity: "warning",
         });
+      }
+    }
+  }
+}
+
+// Rule: When a metric's compute grain includes entities not in the BFT grain
+// (i.e. they must be summarized out), the strategy at the summarization
+// boundary must support aggregation. Only allocation and sum_over_sum can be
+// summarized; elimination and reserve cannot.
+function checkSummarizationValidity(
+  manifest: Manifest,
+  metricHome: Map<string, MetricHome>,
+  errors: ValidationError[]
+): void {
+  const propMap = new Map(manifest.propagations.map((p) => [p.metric, p]));
+
+  for (const table of manifest.bft_tables) {
+    const grainSet = new Set(table.entities);
+
+    for (const metricName of table.metrics) {
+      const home = metricHome.get(metricName);
+      if (!home) continue;
+
+      // Check if the metric's home grain has entities not in BFT grain
+      const homeNotInGrain = home.grain.filter((e) => !grainSet.has(e));
+      if (homeNotInGrain.length === 0) continue;
+
+      // Home has entities that must be summarized out. The metric must
+      // reach BFT grain entities via propagation — check the strategy
+      // at the hop that crosses the boundary (from home grain into BFT grain).
+      const prop = propMap.get(metricName);
+      if (!prop) continue; // caught by checkUnreachableMetrics
+
+      for (const edge of prop.path) {
+        if (!grainSet.has(edge.target_entity)) continue;
+        // This hop crosses into BFT grain — its strategy must support summarization
+        if (edge.strategy === "elimination" || edge.strategy === "reserve") {
+          errors.push({
+            rule: "summarization-strategy",
+            message: `Table "${table.name}": metric "${metricName}" requires summarization (${homeNotInGrain.join(", ")} not in grain) but uses "${edge.strategy}" at boundary — only allocation or sum_over_sum can be summarized`,
+            path: `bft_tables.${table.name}.metrics.${metricName}`,
+          });
+        }
       }
     }
   }
