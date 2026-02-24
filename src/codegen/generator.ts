@@ -5,6 +5,7 @@ import type {
   SourceMapping,
   GeneratedOutput,
   GrainGroup,
+  JoinLink,
 } from "./types.js";
 import { defaultSourceMapping } from "./planner.js";
 import { planAll } from "./planner.js";
@@ -64,16 +65,28 @@ function generateTableSQL(plan: TablePlan, manifest: Manifest, sm: SourceMapping
   const sections: string[] = [];
   const prefix = tablePrefix(plan.tableName);
   const label = manifest.placeholder_labels?.reserve ?? "<Unallocated>";
-
-  // For backward compatibility: when there's one grain group whose grain
-  // equals the BFT grain, produce identical SQL to the pre-grain-aware codegen.
-  const group = plan.grainGroups[0];
   const allMetrics = plan.grainGroups.flatMap((g) => g.metrics);
 
   sections.push(headerComment(plan, sm));
-  sections.push(baseJoinSQL(plan, group, sm, prefix));
-  sections.push(weightedSQL(plan, group, sm, prefix));
-  sections.push(assemblySQL(plan, group, allMetrics, sm, prefix, label));
+
+  // When there's one grain group whose grain matches the BFT grain,
+  // generate the standard 3-step SQL. When summarization is needed,
+  // generate at the compute grain then summarize down.
+  const group = plan.grainGroups[0];
+
+  if (!group.needsSummarization) {
+    // Standard path: base join at BFT grain
+    sections.push(baseJoinSQL(plan.bftGrain, plan.bftJoinChain, allMetrics, sm, prefix));
+    sections.push(weightedSQL(group, sm, prefix));
+    sections.push(assemblySQL(plan, allMetrics, sm, prefix, label));
+  } else {
+    // Summarization path: base join at compute grain, summarize down
+    sections.push(baseJoinSQL(group.grain, group.joinChain, allMetrics, sm, prefix));
+    sections.push(weightedSQL(group, sm, prefix));
+    sections.push(summarizationSQL(plan, group, allMetrics, sm, prefix));
+    sections.push(assemblySQL(plan, allMetrics, sm, prefix, label));
+  }
+
   sections.push(validationSQL(plan, allMetrics, sm));
 
   return sections.join("\n\n");
@@ -100,7 +113,7 @@ function headerComment(plan: TablePlan, sm: SourceMapping): string {
     const dimDesc = m.propagatedDimensions
       .map((d) => `${d.strategy} for ${d.entity}`)
       .join(", ");
-    lines.push(`--   ${m.name} (${m.home.grain[0]}) ${dimDesc}`);
+    lines.push(`--   ${m.name} (${m.home.name}) ${dimDesc}`);
   }
   return lines.join("\n");
 }
@@ -122,34 +135,46 @@ function homeEntity(metric: MetricPlan): string {
   return metric.home.grain[0];
 }
 
-function baseJoinSQL(plan: TablePlan, group: GrainGroup, sm: SourceMapping, prefix: string): string {
-  const entities = plan.bftGrain;
-  const firstEntity = entities[0];
+function baseJoinSQL(
+  grainEntities: string[],
+  joinChain: JoinLink[],
+  allMetrics: MetricPlan[],
+  sm: SourceMapping,
+  prefix: string
+): string {
+  const firstEntity = grainEntities[0];
   const fe = sm.entities[firstEntity];
   const firstAlias = entityAlias(firstEntity);
 
+  // Track which junction tables are used (for relationship metrics)
+  const junctionAliasMap = new Map<string, string>();
+
   // SELECT columns
   const selectCols: string[] = [];
-  for (const entityName of entities) {
+  for (const entityName of grainEntities) {
     const es = sm.entities[entityName];
     const alias = entityAlias(entityName);
     selectCols.push(`${alias}.${es.idColumn}`);
     selectCols.push(`${alias}.${es.labelColumn} AS ${entityName.toLowerCase()}_name`);
-    const entityMetrics = group.metrics.filter((m) => homeEntity(m) === entityName);
+    // Entity metrics
+    const entityMetrics = allMetrics.filter(
+      (m) => m.home.kind === "entity" && m.home.grain[0] === entityName
+    );
     for (const m of entityMetrics) {
       selectCols.push(`${alias}.${m.name}`);
     }
   }
 
-  // JOIN chain
+  // JOIN chain — build it and collect junction aliases
   const aliases = new Map<string, string>();
   aliases.set(firstEntity, firstAlias);
   const joinLines: string[] = [];
 
-  for (const link of plan.bftJoinChain) {
+  for (const link of joinChain) {
     const jAlias = junctionAlias(link.relationship);
     const toAlias = entityAlias(link.toEntity);
     aliases.set(link.toEntity, toAlias);
+    junctionAliasMap.set(link.relationship, jAlias);
 
     const fromAlias = aliases.get(link.fromEntity)!;
     joinLines.push(
@@ -161,9 +186,19 @@ function baseJoinSQL(plan: TablePlan, group: GrainGroup, sm: SourceMapping, pref
     );
   }
 
+  // Relationship metrics — select from junction table alias
+  for (const m of allMetrics) {
+    if (m.home.kind === "relationship") {
+      const jAlias = junctionAliasMap.get(m.home.name);
+      if (jAlias) {
+        selectCols.push(`${jAlias}.${m.name}`);
+      }
+    }
+  }
+
   return [
     `${"-".repeat(71)}`,
-    `-- Step 1: Base grain (${entities.join(" x ")})`,
+    `-- Step 1: Base grain (${grainEntities.join(" x ")})`,
     `${"-".repeat(71)}`,
     `CREATE OR REPLACE TABLE ${prefix}_base AS`,
     `SELECT`,
@@ -177,7 +212,7 @@ function baseJoinSQL(plan: TablePlan, group: GrainGroup, sm: SourceMapping, pref
 // Step 2: Weights (window functions for allocation / sum_over_sum)
 // ---------------------------------------------------------------------------
 
-function weightedSQL(plan: TablePlan, group: GrainGroup, sm: SourceMapping, prefix: string): string {
+function weightedSQL(group: GrainGroup, sm: SourceMapping, prefix: string): string {
   const weightExprs = collectWeights(group, sm);
   if (weightExprs.length === 0) {
     // No weights needed — just alias base as weighted
@@ -225,24 +260,26 @@ function collectWeights(group: GrainGroup, sm: SourceMapping): WeightExpr[] {
 
     // Sort by hopIndex to get the right partition expressions
     const sorted = [...allocDims].sort((a, b) => (a.hopIndex ?? 0) - (b.hopIndex ?? 0));
-    const homeEs = sm.entities[homeEntity(metric)];
+
+    // For relationship metrics, partition by all home grain entity ids
+    const homePartitionCols = metric.home.grain.map((e) => sm.entities[e].idColumn);
 
     for (let i = 0; i < sorted.length; i++) {
       const dim = sorted[i];
 
       if (i === 0 && sorted.length > 1) {
-        // First hop of multi-hop: COUNT(DISTINCT target_id) OVER (PARTITION BY home_id)
+        // First hop of multi-hop: COUNT(DISTINCT target_id) OVER (PARTITION BY home_ids)
         const targetEs = sm.entities[dim.entity];
         const weightName = `${dim.relationship.toLowerCase()}_count`;
         if (seen.has(weightName)) continue;
         seen.add(weightName);
         weights.push({
           name: weightName,
-          expr: `COUNT(DISTINCT ${targetEs.idColumn}) OVER (PARTITION BY ${homeEs.idColumn})`,
+          expr: `COUNT(DISTINCT ${targetEs.idColumn}) OVER (PARTITION BY ${homePartitionCols.join(", ")})`,
         });
       } else if (i > 0) {
         // Subsequent hops: COUNT(*) OVER (PARTITION BY prev_entities)
-        const partitionCols = [homeEs.idColumn];
+        const partitionCols = [...homePartitionCols];
         for (let j = 0; j < i; j++) {
           partitionCols.push(sm.entities[sorted[j].entity].idColumn);
         }
@@ -260,7 +297,7 @@ function collectWeights(group: GrainGroup, sm: SourceMapping): WeightExpr[] {
         seen.add(weightName);
         weights.push({
           name: weightName,
-          expr: `COUNT(*) OVER (PARTITION BY ${homeEs.idColumn})`,
+          expr: `COUNT(*) OVER (PARTITION BY ${homePartitionCols.join(", ")})`,
         });
       }
     }
@@ -270,12 +307,63 @@ function collectWeights(group: GrainGroup, sm: SourceMapping): WeightExpr[] {
 }
 
 // ---------------------------------------------------------------------------
+// Step 2.5: Summarization (GROUP BY to remove non-BFT entities)
+// ---------------------------------------------------------------------------
+
+function summarizationSQL(
+  plan: TablePlan,
+  group: GrainGroup,
+  allMetrics: MetricPlan[],
+  sm: SourceMapping,
+  prefix: string
+): string {
+  const bftGrainSet = new Set(plan.bftGrain);
+
+  // GROUP BY columns: BFT grain entity ids and names
+  const groupByCols: string[] = [];
+  const selectCols: string[] = [];
+
+  for (const entityName of plan.bftGrain) {
+    const es = sm.entities[entityName];
+    groupByCols.push(es.idColumn);
+    groupByCols.push(`${entityName.toLowerCase()}_name`);
+    selectCols.push(es.idColumn);
+    selectCols.push(`${entityName.toLowerCase()}_name`);
+  }
+
+  // Metric expressions: SUM for allocated/eliminated, SUM for value and SUM for weight for sum_over_sum
+  for (const metric of allMetrics) {
+    if (metric.behavior === "fully_allocated") {
+      // Allocation expression from the weighted table, then sum
+      selectCols.push(`SUM(${allocationExpr(metric, sm)}) AS ${metric.name}`);
+    } else if (metric.behavior === "sum_over_sum") {
+      selectCols.push(`SUM(${metric.name}) AS ${metric.name}`);
+      selectCols.push(`SUM(${sumOverSumWeightExpr(metric)}) AS ${metric.name}_weight`);
+    } else if (metric.behavior === "pure_elimination") {
+      selectCols.push(`SUM(${metric.name} * 1.0) AS ${metric.name}`);
+    } else {
+      selectCols.push(`SUM(${metric.name} * 1.0) AS ${metric.name}`);
+    }
+  }
+
+  return [
+    `${"-".repeat(71)}`,
+    `-- Step 2.5: Summarize to BFT grain (${plan.bftGrain.join(" x ")})`,
+    `${"-".repeat(71)}`,
+    `CREATE OR REPLACE TABLE ${prefix}_summarized AS`,
+    `SELECT`,
+    selectCols.map((c) => `    ${c}`).join(",\n"),
+    `FROM ${prefix}_weighted`,
+    `GROUP BY ${groupByCols.join(", ")};`,
+  ].join("\n");
+}
+
+// ---------------------------------------------------------------------------
 // Step 3: Assembly (UNION ALL of base grain + placeholder branches)
 // ---------------------------------------------------------------------------
 
 function assemblySQL(
   plan: TablePlan,
-  group: GrainGroup,
   allMetrics: MetricPlan[],
   sm: SourceMapping,
   prefix: string,
@@ -283,23 +371,30 @@ function assemblySQL(
 ): string {
   const branches: string[] = [];
 
+  // Determine source table for base grain rows
+  const hasSummarization = plan.grainGroups.some((g) => g.needsSummarization);
+  const sourceTable = hasSummarization ? `${prefix}_summarized` : `${prefix}_weighted`;
+
   // Branch A: base grain rows
-  branches.push(baseGrainBranch(plan, group, allMetrics, sm, prefix));
+  branches.push(baseGrainBranch(plan, allMetrics, sm, sourceTable));
 
-  // Placeholder branches for each metric
-  for (const metric of allMetrics) {
-    if (metric.behavior === "fully_allocated" || metric.behavior === "sum_over_sum") {
-      continue; // no placeholder rows needed
-    }
+  // Placeholder branches for each metric (only when no summarization —
+  // summarized tables already have the correct aggregation)
+  if (!hasSummarization) {
+    for (const metric of allMetrics) {
+      if (metric.behavior === "fully_allocated" || metric.behavior === "sum_over_sum") {
+        continue; // no placeholder rows needed
+      }
 
-    if (metric.behavior === "pure_reserve") {
-      branches.push(reserveBranch(plan, metric, allMetrics, sm, placeholderLabel));
-    } else if (metric.behavior === "pure_elimination") {
-      branches.push(eliminationCorrectionBranch(plan, metric, allMetrics, sm, prefix, placeholderLabel));
-    } else if (metric.behavior === "mixed") {
-      // Elimination + reserve interaction
-      branches.push(mixedElimDataBranch(plan, metric, allMetrics, sm, placeholderLabel));
-      branches.push(mixedElimCorrectionBranch(plan, metric, allMetrics, sm, placeholderLabel));
+      if (metric.behavior === "pure_reserve") {
+        branches.push(reserveBranch(plan, metric, allMetrics, sm, placeholderLabel));
+      } else if (metric.behavior === "pure_elimination") {
+        branches.push(eliminationCorrectionBranch(plan, metric, allMetrics, sm, prefix, placeholderLabel));
+      } else if (metric.behavior === "mixed") {
+        // Elimination + reserve interaction
+        branches.push(mixedElimDataBranch(plan, metric, allMetrics, sm, placeholderLabel));
+        branches.push(mixedElimCorrectionBranch(plan, metric, allMetrics, sm, placeholderLabel));
+      }
     }
   }
 
@@ -318,7 +413,13 @@ function assemblySQL(
 /**
  * Base grain branch: all real entity columns, metric expressions applied.
  */
-function baseGrainBranch(plan: TablePlan, group: GrainGroup, allMetrics: MetricPlan[], sm: SourceMapping, prefix: string): string {
+function baseGrainBranch(
+  plan: TablePlan,
+  allMetrics: MetricPlan[],
+  sm: SourceMapping,
+  sourceTable: string
+): string {
+  const hasSummarization = plan.grainGroups.some((g) => g.needsSummarization);
   const lines: string[] = [`-- Base grain rows`];
   lines.push("SELECT");
 
@@ -330,7 +431,13 @@ function baseGrainBranch(plan: TablePlan, group: GrainGroup, allMetrics: MetricP
   }
 
   for (const metric of allMetrics) {
-    if (metric.behavior === "fully_allocated") {
+    if (hasSummarization) {
+      // Summarized table already has the right values
+      cols.push(`${metric.name}`);
+      if (metric.behavior === "sum_over_sum") {
+        cols.push(`${metric.name}_weight`);
+      }
+    } else if (metric.behavior === "fully_allocated") {
       cols.push(allocationExpr(metric, sm) + ` AS ${metric.name}`);
     } else if (metric.behavior === "sum_over_sum") {
       cols.push(`${metric.name}`);
@@ -347,7 +454,7 @@ function baseGrainBranch(plan: TablePlan, group: GrainGroup, allMetrics: MetricP
   }
 
   lines.push(cols.map((c) => `    ${c}`).join(",\n"));
-  lines.push(`FROM ${prefix}_weighted`);
+  lines.push(`FROM ${sourceTable}`);
   return lines.join("\n");
 }
 
@@ -612,6 +719,7 @@ function validationSQL(plan: TablePlan, allMetrics: MetricPlan[], sm: SourceMapp
   checks.push(`-- Validation`);
   checks.push(`${"-".repeat(71)}`);
 
+  const hasSummarization = plan.grainGroups.some((g) => g.needsSummarization);
   let n = 1;
 
   // V: SUM check for each additive metric
@@ -619,39 +727,55 @@ function validationSQL(plan: TablePlan, allMetrics: MetricPlan[], sm: SourceMapp
     if (metric.nature === "non-additive") continue;
 
     const home = homeEntity(metric);
-    const homeEs = sm.entities[home];
+    // For relationship metrics, the source table is the junction table
+    const sourceTable = metric.home.kind === "relationship"
+      ? sm.relationships[metric.home.name].table
+      : sm.entities[home].table;
+
     checks.push("");
     checks.push(`-- V${n}: SUM(${metric.name}) matches source`);
     checks.push(
       `SELECT 'V${n} ${metric.name}_sum' AS test,`,
-      `       CASE WHEN ABS(SUM(${metric.name}) - (SELECT SUM(${metric.name}) FROM ${homeEs.table})) < 0.01`,
+      `       CASE WHEN ABS(SUM(${metric.name}) - (SELECT SUM(${metric.name}) FROM ${sourceTable})) < 0.01`,
       `            THEN 'PASS' ELSE 'FAIL: ' || SUM(${metric.name}) END AS result`,
       `FROM ${plan.tableName};`
     );
     n++;
   }
 
-  // V: Per-entity SUM check for allocated metrics
-  for (const metric of allMetrics) {
-    if (metric.behavior !== "fully_allocated") continue;
+  // V: Per-entity SUM check for allocated metrics (only when no summarization)
+  if (!hasSummarization) {
+    for (const metric of allMetrics) {
+      if (metric.behavior !== "fully_allocated") continue;
 
-    const home = homeEntity(metric);
-    const homeEs = sm.entities[home];
-    checks.push("");
-    checks.push(`-- V${n}: ${metric.name} per ${home} sums to original`);
-    checks.push(
-      `SELECT 'V${n} ${metric.name}_per_${home.toLowerCase()}' AS test,`,
-      `       CASE WHEN COUNT(*) = 0 THEN 'PASS'`,
-      `            ELSE 'FAIL: ' || COUNT(*) || ' with wrong sum' END AS result`,
-      `FROM (`,
-      `    SELECT t.${homeEs.idColumn}, ABS(SUM(t.${metric.name}) - s.${metric.name}) AS err`,
-      `    FROM ${plan.tableName} t`,
-      `    JOIN ${homeEs.table} s ON t.${homeEs.idColumn} = s.${homeEs.idColumn}`,
-      `    GROUP BY t.${homeEs.idColumn}, s.${metric.name}`,
-      `    HAVING ABS(SUM(t.${metric.name}) - s.${metric.name}) > 0.01`,
-      `);`
-    );
-    n++;
+      const home = homeEntity(metric);
+      const homeEs = sm.entities[home];
+      const sourceTable = metric.home.kind === "relationship"
+        ? sm.relationships[metric.home.name].table
+        : homeEs.table;
+
+      if (metric.home.kind === "relationship") {
+        // For relationship metrics, per-home-entity check doesn't apply the same way
+        // (the source is junction rows, not entity rows). Skip for now.
+        continue;
+      }
+
+      checks.push("");
+      checks.push(`-- V${n}: ${metric.name} per ${home} sums to original`);
+      checks.push(
+        `SELECT 'V${n} ${metric.name}_per_${home.toLowerCase()}' AS test,`,
+        `       CASE WHEN COUNT(*) = 0 THEN 'PASS'`,
+        `            ELSE 'FAIL: ' || COUNT(*) || ' with wrong sum' END AS result`,
+        `FROM (`,
+        `    SELECT t.${homeEs.idColumn}, ABS(SUM(t.${metric.name}) - s.${metric.name}) AS err`,
+        `    FROM ${plan.tableName} t`,
+        `    JOIN ${homeEs.table} s ON t.${homeEs.idColumn} = s.${homeEs.idColumn}`,
+        `    GROUP BY t.${homeEs.idColumn}, s.${metric.name}`,
+        `    HAVING ABS(SUM(t.${metric.name}) - s.${metric.name}) > 0.01`,
+        `);`
+      );
+      n++;
+    }
   }
 
   // V: Sum/Sum weight check

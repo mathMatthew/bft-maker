@@ -34,6 +34,10 @@ relationships:
     between: [Student, Class]
     type: many-to-many
     estimated_links: 90
+    metrics:
+      - name: enrollment_grade
+        type: float
+        nature: additive
 
   - name: Assignment
     between: [Class, Professor]
@@ -77,6 +81,15 @@ propagations:
         strategy: sum_over_sum
         weight: satisfaction_weight
 
+  # enrollment_grade (Enrollment junction: Student x Class) allocates
+  # outward through Assignment to Professor.
+  - metric: enrollment_grade
+    path:
+      - relationship: Assignment
+        target_entity: Professor
+        strategy: allocation
+        weight: assignment_share
+
 bft_tables:
   # Student × Class × Professor
   # tuition (allocated through both hops), class_budget (eliminated
@@ -87,6 +100,15 @@ bft_tables:
 
   # Student × Class only — tuition's path to Professor is unused
   # because Professor isn't in this table's entities.
+  # enrollment_grade is a junction metric at its natural grain.
   - name: student_experience
     entities: [Student, Class]
-    metrics: [tuition_paid, satisfaction_score, class_budget]
+    metrics: [tuition_paid, satisfaction_score, class_budget, enrollment_grade]
+
+  # Class × Professor — exercises summarization.
+  # tuition_paid: Student summarized out (allocation boundary ok).
+  # enrollment_grade: Student summarized out (from junction metric,
+  # propagated via allocation to Professor).
+  - name: class_summary
+    entities: [Class, Professor]
+    metrics: [tuition_paid, enrollment_grade]

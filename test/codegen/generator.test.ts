@@ -76,7 +76,7 @@ describe("generator", () => {
 
     assert.ok(output.loadDataSQL.includes("CREATE OR REPLACE TABLE students"));
     assert.ok(output.loadDataSQL.includes("CREATE OR REPLACE TABLE enrollments"));
-    assert.equal(output.tables.length, 2);
+    assert.equal(output.tables.length, 3);
 
     const df = output.tables.find((t) => t.name === "department_financial")!;
     assert.ok(df.sql.includes("CREATE OR REPLACE TABLE df_base"));
@@ -96,6 +96,14 @@ describe("generator", () => {
     assert.ok(se.sql.includes("Elimination correction rows for class_budget"));
     // Sum/Sum weight
     assert.ok(se.sql.includes("satisfaction_score_weight"));
+    // Junction metric
+    assert.ok(se.sql.includes("enrollment_grade"));
+
+    const cs = output.tables.find((t) => t.name === "class_summary")!;
+    assert.ok(cs.sql.includes("CREATE OR REPLACE TABLE cs_base"));
+    // Summarization step
+    assert.ok(cs.sql.includes("Summarize to BFT grain"));
+    assert.ok(cs.sql.includes("CREATE OR REPLACE TABLE cs_summarized"));
   });
 
   it("generates valid run script", () => {
@@ -183,5 +191,43 @@ print(json.dumps(results))
     const results = JSON.parse(raw) as Record<string, string>[];
     const countResult = results.find((r) => r.cnt !== undefined);
     assert.equal(countResult?.cnt, "100");
+  });
+
+  it("all validations pass for class_summary", () => {
+    const cs = output.tables.find((t) => t.name === "class_summary")!;
+    const raw = runSQL([output.loadDataSQL, cs.sql]);
+    const results = JSON.parse(raw) as { test: string; result: string }[];
+    for (const r of results) {
+      assert.ok(r.result.includes("PASS"), `${r.test}: ${r.result}`);
+    }
+    assert.ok(results.length >= 2, `Expected at least 2 validation checks, got ${results.length}`);
+  });
+
+  it("class_summary has correct row count", () => {
+    const cs = output.tables.find((t) => t.name === "class_summary")!;
+    const raw = runSQL([
+      output.loadDataSQL,
+      cs.sql,
+      "SELECT CAST(COUNT(*) AS VARCHAR) AS cnt FROM class_summary",
+    ]);
+    const results = JSON.parse(raw) as Record<string, string>[];
+    const countResult = results.find((r) => r.cnt !== undefined);
+    // Class × Professor via Assignment = 13 rows
+    assert.equal(countResult?.cnt, "13");
+  });
+
+  it("class_summary enrollment_grade SUM matches source junction table", () => {
+    const cs = output.tables.find((t) => t.name === "class_summary")!;
+    const raw = runSQL([
+      output.loadDataSQL,
+      cs.sql,
+      `SELECT 'grade_sum' AS test,
+              CASE WHEN ABS(SUM(enrollment_grade) - (SELECT SUM(enrollment_grade) FROM enrollments)) < 0.01
+                   THEN 'PASS' ELSE 'FAIL: bft=' || SUM(enrollment_grade) || ' src=' || (SELECT SUM(enrollment_grade) FROM enrollments) END AS result
+       FROM class_summary`,
+    ]);
+    const results = JSON.parse(raw) as { test: string; result: string }[];
+    const gradeResult = results.find((r) => r.test === "grade_sum");
+    assert.ok(gradeResult?.result.includes("PASS"), `grade sum: ${gradeResult?.result}`);
   });
 });

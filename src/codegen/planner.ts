@@ -161,7 +161,7 @@ function classifyBehavior(
   summarizeOutCount: number
 ): MetricBehavior {
   if (nature === "non-additive") return "sum_over_sum";
-  if (dimensions.length === 0) return "pure_reserve";
+  if (dimensions.length === 0) return "fully_allocated";
 
   const strategies = new Set(dimensions.map((d) => d.strategy));
   if (strategies.size === 1) {
