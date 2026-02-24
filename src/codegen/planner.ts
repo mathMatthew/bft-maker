@@ -1,5 +1,5 @@
 import type { Manifest, BftTable, Relationship } from "../manifest/types.js";
-import { buildMetricOwnerMap, findMetricDef } from "../manifest/helpers.js";
+import { buildMetricHomeMap, findMetricDef } from "../manifest/helpers.js";
 import type {
   TablePlan,
   MetricPlan,
@@ -56,15 +56,15 @@ function pluralize(word: string): string {
  * Build a plan for one BFT table.
  */
 export function planTable(manifest: Manifest, table: BftTable, sourceMapping: SourceMapping): TablePlan {
-  const metricOwners = buildMetricOwnerMap(manifest.entities);
+  const metricHomes = buildMetricHomeMap(manifest.entities, manifest.relationships);
   const joinChain = buildJoinChain(table.entities, manifest.relationships, sourceMapping);
 
   const metrics: MetricPlan[] = table.metrics.map((metricName) => {
-    const owner = metricOwners.get(metricName);
-    if (!owner) throw new Error(`Metric "${metricName}" not found on any entity`);
-    const def = findMetricDef(manifest.entities, metricName)!;
+    const home = metricHomes.get(metricName);
+    if (!home) throw new Error(`Metric "${metricName}" not found on any entity or relationship`);
+    const def = findMetricDef(manifest.entities, manifest.relationships, metricName)!;
 
-    const foreignEntities = table.entities.filter((e) => e !== owner.name);
+    const foreignEntities = table.entities.filter((e) => !home.grain.includes(e));
     const propagation = manifest.propagations.find((p) => p.metric === metricName);
 
     const dimensions: DimensionStrategy[] = foreignEntities.map((entityName) => {
@@ -90,7 +90,7 @@ export function planTable(manifest: Manifest, table: BftTable, sourceMapping: So
 
     return {
       name: metricName,
-      homeEntity: owner.name,
+      homeEntity: home.grain[0],
       nature: def.nature,
       dimensions,
       behavior,

@@ -1,6 +1,7 @@
 import type { Manifest, Entity } from "./types.js";
 import { VALID_STRATEGIES } from "./types.js";
-import { buildMetricOwnerMap, findMetricDef } from "./helpers.js";
+import { buildMetricHomeMap, findMetricDef } from "./helpers.js";
+import type { MetricHome } from "./helpers.js";
 
 export interface ValidationError {
   rule: string;
@@ -13,7 +14,7 @@ export function validate(manifest: Manifest): ValidationError[] {
   const errors: ValidationError[] = [];
 
   const entityMap = buildEntityMap(manifest.entities);
-  const metricOwner = buildMetricOwnerMap(manifest.entities);
+  const metricHome = buildMetricHomeMap(manifest.entities, manifest.relationships);
   const relationshipNames = new Set(
     manifest.relationships.map((r) => r.name)
   );
@@ -21,10 +22,10 @@ export function validate(manifest: Manifest): ValidationError[] {
   checkDuplicateNames(manifest, errors);
   checkPositiveCardinalities(manifest, errors);
   checkRelationshipEntities(manifest, entityMap, errors);
-  checkPropagations(manifest, entityMap, metricOwner, relationshipNames, errors);
+  checkPropagations(manifest, entityMap, metricHome, relationshipNames, errors);
   checkTableEntities(manifest, entityMap, errors);
-  checkTableMetrics(manifest, metricOwner, errors);
-  checkUnreachableMetrics(manifest, metricOwner, errors);
+  checkTableMetrics(manifest, metricHome, errors);
+  checkUnreachableMetrics(manifest, metricHome, errors);
 
   return errors;
 }
@@ -48,6 +49,13 @@ function checkDuplicateNames(
   for (const entity of manifest.entities) {
     for (const metric of entity.metrics) {
       allMetrics.push(metric.name);
+    }
+  }
+  for (const rel of manifest.relationships) {
+    if (rel.metrics) {
+      for (const metric of rel.metrics) {
+        allMetrics.push(metric.name);
+      }
     }
   }
   checkDuplicates(allMetrics, "metric", errors);
@@ -150,7 +158,7 @@ function checkRelationshipEntities(
 function checkPropagations(
   manifest: Manifest,
   entityMap: Map<string, Entity>,
-  metricOwner: Map<string, Entity>,
+  metricHome: Map<string, MetricHome>,
   relationshipNames: Set<string>,
   errors: ValidationError[]
 ): void {
@@ -158,8 +166,8 @@ function checkPropagations(
   const nonAdditiveInvalid = new Set(["allocation", "elimination"]);
 
   for (const prop of manifest.propagations) {
-    const owner = metricOwner.get(prop.metric);
-    if (!owner) {
+    const home = metricHome.get(prop.metric);
+    if (!home) {
       errors.push({
         rule: "propagation-metric-exists",
         message: `Propagation references nonexistent metric "${prop.metric}"`,
@@ -179,11 +187,13 @@ function checkPropagations(
       continue;
     }
 
-    const def = findMetricDef(manifest.entities, prop.metric);
+    const def = findMetricDef(manifest.entities, manifest.relationships, prop.metric);
 
-    // Walk the path and validate each edge
-    let currentEntity = owner.name;
-    const visited = new Set<string>([currentEntity]);
+    // Walk the path and validate each edge.
+    // For entity metrics, start from the single home entity.
+    // For relationship metrics, start from both between entities.
+    const currentEntities = new Set<string>(home.grain);
+    const visited = new Set<string>(home.grain);
 
     for (let i = 0; i < prop.path.length; i++) {
       const edge = prop.path[i];
@@ -195,7 +205,8 @@ function checkPropagations(
           message: `Propagation for "${prop.metric}" references nonexistent relationship "${edge.relationship}"`,
           path: `propagations.${prop.metric}.path[${i}]`,
         });
-        currentEntity = edge.target_entity;
+        currentEntities.clear();
+        currentEntities.add(edge.target_entity);
         continue;
       }
 
@@ -206,20 +217,22 @@ function checkPropagations(
           message: `Propagation for "${prop.metric}" references nonexistent target entity "${edge.target_entity}"`,
           path: `propagations.${prop.metric}.path[${i}]`,
         });
-        currentEntity = edge.target_entity;
+        currentEntities.clear();
+        currentEntities.add(edge.target_entity);
         continue;
       }
 
-      // Check relationship connects current entity to target entity
+      // Check relationship connects some current entity to target entity
       const rel = relMap.get(edge.relationship);
       if (rel) {
         const connects =
-          (rel.between[0] === currentEntity && rel.between[1] === edge.target_entity) ||
-          (rel.between[1] === currentEntity && rel.between[0] === edge.target_entity);
+          (currentEntities.has(rel.between[0]) && rel.between[1] === edge.target_entity) ||
+          (currentEntities.has(rel.between[1]) && rel.between[0] === edge.target_entity);
         if (!connects) {
+          const currentList = [...currentEntities].join(", ");
           errors.push({
             rule: "propagation-path-connected",
-            message: `Propagation for "${prop.metric}": relationship "${edge.relationship}" does not connect "${currentEntity}" to "${edge.target_entity}"`,
+            message: `Propagation for "${prop.metric}": relationship "${edge.relationship}" does not connect "${currentList}" to "${edge.target_entity}"`,
             path: `propagations.${prop.metric}.path[${i}]`,
           });
         }
@@ -262,7 +275,7 @@ function checkPropagations(
         });
       }
 
-      currentEntity = edge.target_entity;
+      currentEntities.add(edge.target_entity);
     }
   }
 }
@@ -305,10 +318,10 @@ function checkTableEntities(
   }
 }
 
-// Rule: All metric names referenced in tables must exist on some entity.
+// Rule: All metric names referenced in tables must exist on some entity or relationship.
 function checkTableMetrics(
   manifest: Manifest,
-  metricOwner: Map<string, Entity>,
+  metricHome: Map<string, MetricHome>,
   errors: ValidationError[]
 ): void {
   for (const table of manifest.bft_tables) {
@@ -323,7 +336,7 @@ function checkTableMetrics(
       }
       seen.add(metricName);
 
-      if (!metricOwner.has(metricName)) {
+      if (!metricHome.has(metricName)) {
         errors.push({
           rule: "table-metric-exists",
           message: `Table "${table.name}" references nonexistent metric "${metricName}"`,
@@ -334,11 +347,11 @@ function checkTableMetrics(
   }
 }
 
-// Warning: A metric whose home entity isn't in the grain and whose propagation
-// path doesn't reach any grain entity contributes nothing to the table.
+// Warning: A metric whose home grain doesn't overlap the BFT grain and whose
+// propagation path doesn't reach any grain entity contributes nothing to the table.
 function checkUnreachableMetrics(
   manifest: Manifest,
-  metricOwner: Map<string, Entity>,
+  metricHome: Map<string, MetricHome>,
   errors: ValidationError[]
 ): void {
   const propMap = new Map(manifest.propagations.map((p) => [p.metric, p]));
@@ -347,19 +360,19 @@ function checkUnreachableMetrics(
     const grainSet = new Set(table.entities);
 
     for (const metricName of table.metrics) {
-      const owner = metricOwner.get(metricName);
-      if (!owner) continue; // caught by checkTableMetrics
+      const home = metricHome.get(metricName);
+      if (!home) continue; // caught by checkTableMetrics
 
-      if (grainSet.has(owner.name)) continue; // home entity in grain, metric is reachable
+      if (home.grain.some((e) => grainSet.has(e))) continue; // home grain overlaps BFT grain
 
-      // Home entity not in grain — check if any propagation hop targets a grain entity
+      // Home grain not in BFT grain — check if any propagation hop targets a grain entity
       const prop = propMap.get(metricName);
       const reachesGrain = prop?.path.some((edge) => grainSet.has(edge.target_entity)) ?? false;
 
       if (!reachesGrain) {
         errors.push({
           rule: "table-metric-unreachable",
-          message: `Table "${table.name}": metric "${metricName}" (owned by ${owner.name}) has no path to any entity in the table — it will contribute nothing`,
+          message: `Table "${table.name}": metric "${metricName}" (owned by ${home.name}) has no path to any entity in the table — it will contribute nothing`,
           path: `bft_tables.${table.name}.metrics.${metricName}`,
           severity: "warning",
         });
