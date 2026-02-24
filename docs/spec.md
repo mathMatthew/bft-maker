@@ -55,33 +55,33 @@ There are three strategies for additive metrics and one pattern for non-additive
 
 ### Reserve
 
-The metric shows its value only on rows where the home entity is present. Foreign entity columns on those rows display a placeholder label (default `<Unallocated>`) — the value isn't about any specific foreign entity. On all other rows, the metric is zero.
+The metric lives on its home entity's rows. It is zero everywhere else. If the home entity isn't in the table's grain, the metric's total appears on a single summary row.
 
-Example: tuition (a Student metric) in a Student × Class table. Each student has a row with Class = `<Unallocated>` and their full tuition. Student × Class join rows show tuition = 0. Pivot by Student and you see each student's tuition naturally. Pivot by Class and the total sits on `<Unallocated>`.
+Example: tuition (a Student metric) in a Student × Class table. Each student gets a row where Class = `<Unallocated>` carrying their full tuition. Student × Class combination rows show tuition = 0. Pivot by Student and you see each student's tuition. Pivot by Class and the total sits on `<Unallocated>`.
 
-`SUM` is safe — every value appears exactly once. Filtering out rows with placeholder labels drops the metric's total.
+`SUM` is safe — every value appears exactly once. Filtering out rows with placeholder labels drops the metric entirely.
 
 Reserve is the **default strategy**. It makes no assumptions about how a metric relates to foreign entities. It is the safe, assumption-free starting point.
 
 ### Elimination
 
-The full metric value appears on every foreign row. Since this overcounts, the output includes rows where the foreign entity column shows a placeholder label and the metric carries a negative value that cancels the extra copies.
+Every combination row sees the full metric value — the number is there as context, not attribution. Since this repeats the value, SUM overcounts. Correction rows carry a negative offset that keeps the total correct.
 
-Example: class_budget (a Class metric) with elimination toward Student. Every Student × Class row shows the full class budget — useful when the number is context, not attribution. Each class also has a row with Student = `<Unallocated>` carrying a negative offset so that `SUM(class_budget)` returns the true total.
+Example: class_budget (a Class metric) with elimination toward Student. Every Student × Class combination row shows the full class budget. Each class also gets a correction row (Student = `<Unallocated>`) carrying a negative offset so that `SUM(class_budget)` returns the true total.
 
-`SUM` is safe as long as rows with placeholder labels are included. Filtering them out produces a multiple of the true total.
+`SUM` is safe as long as correction rows are included. Filtering them out produces a multiple of the true total.
 
 Elimination is useful when users want to see a reference number alongside foreign detail. "Every employee in the Southwest can see that the region did $2M in revenue" — the $2M appears on every row, and the sum at the bottom still says $2M.
 
 ### Allocation
 
-The total value is divided across foreign rows using a weight. `SUM` returns the correct total for any slice. The weight can come from a declared relationship (enrollment count, assignment share, FTE load) or from shared dimensions (headcount in the org, equal split).
+The metric's value is divided across combination rows so that each row carries a share. `SUM` returns the correct total for any slice. The weight can come from a declared relationship (enrollment count, assignment share, FTE load) or from shared dimensions (headcount in the org, equal split).
 
-Allocation is the only strategy that attributes a metric to individual foreign rows. It requires either a direct relationship or a deliberate decision to distribute on a shared dimension. The nature of the weight determines whether the attribution is precise or approximate — allocation by account assignment is precise; allocation by org headcount share is rough — but the mechanics are identical.
+Allocation is the only strategy that attributes a metric to individual combination rows. It requires either a direct relationship or a deliberate decision to distribute on a shared dimension. The nature of the weight determines whether the attribution is precise or approximate — allocation by account assignment is precise; allocation by org headcount share is rough — but the mechanics are identical.
 
 ### Sum / Sum (Non-Additive Metrics)
 
-For metrics that cannot be meaningfully split or summed (ratings, scores, percentages), the raw value is preserved on each row and a companion weight column is emitted that sums to 1.0 per unique entity. These columns are explicitly flagged as not SUM-safe. The correct aggregation is always:
+For metrics that are not additive — ratings, scores, percentages — the raw value is preserved on each row and a companion weight column is emitted that sums to 1.0 per unique entity. These columns are explicitly flagged as not SUM-safe. The correct aggregation is always:
 
 ```
 Average = SUM(weighted_metric) / SUM(entity_weight)
@@ -89,13 +89,20 @@ Average = SUM(weighted_metric) / SUM(entity_weight)
 
 Report authors must use this pattern. Native `AVERAGE` will produce wrong results.
 
-### Placeholder Rows at the Table Level
+### Row Structure
 
-Reserve and elimination both produce placeholder rows — rows where a foreign entity column shows a placeholder label (default `<Unallocated>`). The count is the same for both strategies: one row per value of the metric's home entity. Whether you zero-out and add (reserve) or repeat and subtract (elimination), the math requires the same number of rows to keep `SUM` correct.
+A BFT table contains two kinds of rows:
 
-At the table level, this means: if two entities each have metrics that are reserve (or elimination) toward the other, the table's placeholder rows are both entities' row counts added together. A Student × Class table where tuition is reserve for Class and class_budget is reserve for Student gets 45,000 placeholder rows (one per student) plus 1,200 placeholder rows (one per class) = 46,200 placeholder rows on top of the 120,000 join rows. Each placeholder row carries one entity's metric value with the other entity's column set to `<Unallocated>`.
+**Combination rows** come from joining entities through their relationships — one row per link (e.g., one per student-class enrollment). These exist when any metric in the table uses allocation, elimination, or sum/sum. If every metric is reserve, the join never happens and no combination rows exist.
 
-Allocation is the only strategy that avoids placeholder rows entirely — it distributes values across the existing join rows.
+**Entity rows** represent a single entity. Foreign entity columns show a placeholder label (default `<Unallocated>`). Reserve and elimination both produce entity rows — one per value of the metric's home entity:
+
+- **Reserve** entity rows carry the metric's value.
+- **Elimination** entity rows carry a correction offset that keeps SUM correct.
+
+Allocation and sum/sum live entirely on combination rows and produce no entity rows.
+
+**Row count** = combination rows + entity rows. Example: a Student × Class table (120,000 enrollments, 45,000 students, 1,200 classes). If tuition is allocated to Class and class_budget is reserve for Student: 120,000 combination rows + 1,200 entity rows (one per class) = 121,200. If both metrics are reserve, the join never happens: 45,000 entity rows (students) + 1,200 entity rows (classes) = 46,200 — no combination rows at all.
 
 ---
 
@@ -229,6 +236,20 @@ propagations:
   # salary (Professor) stays reserve for all foreign entities.
   # Not listed — reserve is the default.
 ```
+
+**Shorthand for shared paths.** When multiple metrics from the same entity share an identical propagation path, `metric` accepts a list:
+
+```yaml
+propagations:
+  - metric: [tuition_paid, fees, deposits]
+    path:
+      - relationship: Enrollment
+        target_entity: Class
+        strategy: allocation
+        weight: enrollment_share
+```
+
+This is equivalent to declaring three separate propagations with the same path. Any metric can still get its own block if it needs a different path.
 
 **Direction is implicit.** Each metric propagates outward from its home entity. The path lists target entities in order. Relationships are undirected; the metric's home determines the direction.
 
@@ -366,7 +387,7 @@ Once the manifest is complete, the code generator produces two things: **transfo
 
 The build plan fully specifies every transformation, so code generation is mechanical. Each strategy maps to a SQL template:
 
-**Allocation** — a window function that computes a share and multiplies:
+**Allocation** — divide the metric across combination rows using a window function share:
 ```sql
 SELECT *,
   tuition_paid * (enrollment_share / SUM(enrollment_share) OVER (PARTITION BY class_id))
@@ -374,7 +395,7 @@ SELECT *,
 FROM base_grain
 ```
 
-**Elimination** — the full value on every row, with a negating offset to keep `SUM` correct:
+**Elimination** — full value on every combination row, with correction rows carrying a negative offset:
 ```sql
 SELECT *, class_budget AS class_budget_elim FROM base_grain
 UNION ALL

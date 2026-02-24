@@ -18,19 +18,12 @@ bft-maker/
 │   │   ├── graph.ts              # Graph utilities (connected components)
 │   │   └── yaml.ts               # YAML parse/serialize/load/save
 │   │
-│   ├── codegen/                  # (not yet implemented)
-│   │   ├── planner.ts            # Manifest → ordered build plan
-│   │   ├── sql/
-│   │   │   ├── allocation.ts     # Allocation strategy template
-│   │   │   ├── elimination.ts    # Elimination strategy template
-│   │   │   ├── reserve.ts        # Reserve strategy template
-│   │   │   ├── sum-over-sum.ts   # Sum/Sum strategy template
-│   │   │   ├── join.ts           # Final join assembly
-│   │   │   └── validation.ts     # Test query generator
+│   ├── codegen/
+│   │   ├── types.ts              # TablePlan, MetricPlan, SourceMapping types
+│   │   ├── planner.ts            # Manifest → table plans (join chains, strategy classification)
+│   │   ├── generator.ts          # Table plans → SQL strings (all strategies, validation)
 │   │   ├── emit.ts               # Writes numbered .sql files + run.sh
-│   │   └── dialects/
-│   │       ├── duckdb.ts         # DuckDB dialect (primary)
-│   │       └── spark.ts          # Spark SQL dialect (scale-out)
+│   │   └── index.ts              # Public API
 │   │
 │   └── cli/
 │       └── index.ts              # CLI entry point
@@ -113,9 +106,11 @@ interface Relationship {
  * Defines how a metric propagates from its home entity to foreign entities.
  * Direction is implicit: always outward from the metric's home entity.
  * Metrics not listed here default to reserve (no propagation needed).
+ * In YAML, metric accepts a string or string[] — arrays are expanded
+ * into individual propagations during parsing.
  */
 interface MetricPropagation {
-  metric: string;                // metric name (home entity is known)
+  metric: string;                // YAML shorthand: string | string[]
   path: PropagationEdge[];       // ordered edges from home outward
 }
 
@@ -181,7 +176,7 @@ Rules:
 - One M-M bridge: `relationship.estimated_links`
 - Two M-M bridges sharing a bridge entity: `links₁ × (links₂ / bridge.estimated_rows)`
 - Disconnected entities (no M-M connecting them): sum of row counts (sparse union)
-- Placeholder rows: `entity.estimated_rows` per entity with reserve or elimination strategy metrics. Reserve and elimination need the same count — whether you zero-out and add or repeat and subtract, one row per entity value is required to keep `SUM` correct. If two entities each reserve/eliminate toward each other, both entities' row counts contribute to the placeholder total.
+- Entity rows: `entity.estimated_rows` per entity with reserve or elimination metrics. Reserve and elimination both need one row per home entity value — reserve to carry the metric's value, elimination to carry a correction offset. If two entities each have reserve/elimination metrics toward the other, both contribute entity rows.
 
 ### Table-level estimation with independent chains
 
@@ -201,68 +196,37 @@ Example: Building → Month (60 links) and Program → Month (36 links), no metr
 
 ## Code Generator
 
-### Build Planner
+### Planner
 
-`planner.ts` reads a complete manifest and produces an ordered list of build steps:
-
-```typescript
-interface BuildStep {
-  order: number;
-  filename: string;               // e.g., "01_base_enrollment.sql"
-  description: string;
-  depends_on: string[];           // filenames of prior steps
-  type: "join" | "allocation" | "elimination" | "reserve" | "sum_over_sum" | "final";
-}
-
-function plan(manifest: Manifest): BuildStep[];
-```
-
-The ordering logic:
-1. Base joins that establish the grain (one per BFT)
-2. Strategy transformations (one per metric-strategy pair, parallelizable)
-3. Final assembly join (combines all strategy outputs into the BFT)
-4. Validation queries
-
-### SQL Templates
-
-Each strategy module exports a single function:
+`planner.ts` reads a manifest and produces a `TablePlan` for each BFT table:
 
 ```typescript
-// allocation.ts
-function emitAllocation(metric: ResolvedMetric, table: BftTable, dialect: Dialect): string;
-
-// elimination.ts
-function emitElimination(metric: ResolvedMetric, table: BftTable, dialect: Dialect): string;
-
-// reserve.ts
-function emitReserve(metric: ResolvedMetric, table: BftTable, dialect: Dialect): string;
-
-// sum-over-sum.ts
-function emitSumOverSum(metric: ResolvedMetric, table: BftTable, dialect: Dialect): string;
-```
-
-Each returns a complete, executable SQL statement. No Jinja. No templating language. String interpolation from the manifest is the template engine.
-
-```typescript
-type Dialect = "duckdb" | "spark";
-```
-
-The dialect differences for the operations bft-maker uses (window functions, CTEs, aggregations, UNION ALL) are minimal. The dialect layer handles syntax variations like `CREATE OR REPLACE TABLE` vs `CREATE TABLE IF NOT EXISTS` and minor type casting differences.
-
-### Validation Generator
-
-`validation.ts` reads the manifest and emits one SQL query per assertion. Each query returns zero rows on success.
-
-```typescript
-function emitValidation(table: BftTable): ValidationQuery[];
-
-interface ValidationQuery {
-  name: string;                   // e.g., "allocation_sum_check_tuition_paid"
-  description: string;
-  sql: string;                    // returns rows only on failure
-  severity: "error" | "warning"; // warnings for row count tolerance
+interface TablePlan {
+  tableName: string;
+  entities: string[];             // grain entities
+  joinChain: JoinLink[];          // how to join entities through bridges
+  metrics: MetricPlan[];          // each metric's strategy per dimension
 }
 ```
+
+Each `MetricPlan` classifies the metric's behavior across all foreign dimensions: `fully_allocated`, `pure_reserve`, `pure_elimination`, `mixed` (elimination + reserve), or `sum_over_sum`. This classification drives SQL generation.
+
+### Generator
+
+A single module (`src/codegen/generator.ts`) takes a table plan and produces a complete SQL string with these sections:
+
+1. **Base join** — combination rows from entity joins through bridge tables
+2. **Weights** — window functions for allocation and sum/sum (COUNT-based equal shares)
+3. **Assembly** — UNION ALL of combination rows (with strategy expressions applied) and entity rows (reserve values, elimination corrections)
+4. **Validation** — assertion queries that return PASS/FAIL (SUM checks, per-entity checks, weight checks)
+
+Each strategy maps to SQL patterns:
+- **Allocation** — divide metric value across combination rows using window function shares
+- **Elimination** — full value on combination rows, correction rows with negative offset
+- **Reserve** — metric value on home entity rows, zero on combination rows
+- **Sum/Sum** — raw value preserved, companion weight column for correct averaging
+
+No Jinja. No templating language. String interpolation from the manifest is the template engine. DuckDB is the current dialect; Spark SQL is a planned secondary target.
 
 ### Output
 
