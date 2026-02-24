@@ -27,39 +27,43 @@ describe("planner", () => {
     const plan = planTable(manifest, table, sm);
 
     assert.equal(plan.tableName, "department_financial");
-    assert.deepEqual(plan.entities, ["Student", "Class", "Professor"]);
-    assert.equal(plan.joinChain.length, 2);
+    assert.deepEqual(plan.bftGrain, ["Student", "Class", "Professor"]);
+    assert.equal(plan.bftJoinChain.length, 2);
+
+    const allMetrics = plan.grainGroups.flatMap((g) => g.metrics);
 
     // tuition_paid: fully_allocated (allocation to Class and Professor)
-    const tuition = plan.metrics.find((m) => m.name === "tuition_paid")!;
+    const tuition = allMetrics.find((m) => m.name === "tuition_paid")!;
     assert.equal(tuition.behavior, "fully_allocated");
-    assert.equal(tuition.homeEntity, "Student");
+    assert.equal(tuition.home.grain[0], "Student");
 
     // class_budget: mixed (elimination to Student, reserve for Professor)
-    const budget = plan.metrics.find((m) => m.name === "class_budget")!;
+    const budget = allMetrics.find((m) => m.name === "class_budget")!;
     assert.equal(budget.behavior, "mixed");
-    assert.equal(budget.homeEntity, "Class");
+    assert.equal(budget.home.grain[0], "Class");
 
     // salary: pure_reserve (no propagation)
-    const salary = plan.metrics.find((m) => m.name === "salary")!;
+    const salary = allMetrics.find((m) => m.name === "salary")!;
     assert.equal(salary.behavior, "pure_reserve");
-    assert.equal(salary.homeEntity, "Professor");
+    assert.equal(salary.home.grain[0], "Professor");
   });
 
   it("plans student_experience with correct strategies", () => {
     const table = manifest.bft_tables.find((t) => t.name === "student_experience")!;
     const plan = planTable(manifest, table, sm);
 
-    assert.equal(plan.entities.length, 2);
-    assert.equal(plan.joinChain.length, 1);
+    assert.equal(plan.bftGrain.length, 2);
+    assert.equal(plan.bftJoinChain.length, 1);
 
-    const tuition = plan.metrics.find((m) => m.name === "tuition_paid")!;
+    const allMetrics = plan.grainGroups.flatMap((g) => g.metrics);
+
+    const tuition = allMetrics.find((m) => m.name === "tuition_paid")!;
     assert.equal(tuition.behavior, "fully_allocated");
 
-    const satisfaction = plan.metrics.find((m) => m.name === "satisfaction_score")!;
+    const satisfaction = allMetrics.find((m) => m.name === "satisfaction_score")!;
     assert.equal(satisfaction.behavior, "sum_over_sum");
 
-    const budget = plan.metrics.find((m) => m.name === "class_budget")!;
+    const budget = allMetrics.find((m) => m.name === "class_budget")!;
     assert.equal(budget.behavior, "pure_elimination");
   });
 });

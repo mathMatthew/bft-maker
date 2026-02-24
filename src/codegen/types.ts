@@ -1,4 +1,5 @@
 import type { Strategy } from "../manifest/types.js";
+import type { MetricHome } from "../manifest/helpers.js";
 
 /**
  * Maps entity/relationship names to database table and column names.
@@ -37,17 +38,42 @@ export interface DimensionStrategy {
  */
 export interface MetricPlan {
   name: string;
-  homeEntity: string;
+  home: MetricHome;
   nature: "additive" | "non-additive";
-  /** Strategy for each non-home entity in the table */
-  dimensions: DimensionStrategy[];
+
+  /** Strategy for each non-home entity in the compute grain */
+  propagatedDimensions: DimensionStrategy[];
+
+  /** The grain at which this metric is computed (home + propagation targets).
+   *  May include entities not in BFT grain (to be summarized out). */
+  computeGrain: string[];
+
+  /** BFT entities not in computeGrain — reserve treatment. */
+  reserveDimensions: string[];
+
+  /** Entities in computeGrain not in BFT grain — aggregated out after computation. */
+  summarizeOut: string[];
+
   /** Shorthand classification for SQL generation */
-  behavior:
-    | "fully_allocated"   // all dims are allocation
-    | "sum_over_sum"      // non-additive, sum/sum for some dims
-    | "pure_elimination"  // all dims are elimination (no reserve interaction)
-    | "pure_reserve"      // all dims are reserve (no propagation)
-    | "mixed";            // elimination for some dims, reserve for others
+  behavior: MetricBehavior;
+}
+
+export type MetricBehavior =
+  | "fully_allocated"    // all propagated dims allocation, no reserve dims, no summarization
+  | "sum_over_sum"       // non-additive
+  | "pure_elimination"   // all propagated dims elimination, no reserve dims
+  | "pure_reserve"       // no propagated dims (all foreign entities are reserve)
+  | "mixed";             // any other combination
+
+/**
+ * Metrics sharing the same computeGrain are grouped for shared SQL generation.
+ */
+export interface GrainGroup {
+  id: string;                    // CTE naming prefix
+  grain: string[];               // the shared computeGrain
+  joinChain: JoinLink[];         // how to join entities at this grain
+  metrics: MetricPlan[];         // metrics computed at this grain
+  needsSummarization: boolean;   // true if grain includes non-BFT entities
 }
 
 /**
@@ -67,9 +93,9 @@ export interface JoinLink {
  */
 export interface TablePlan {
   tableName: string;
-  entities: string[];
-  joinChain: JoinLink[];
-  metrics: MetricPlan[];
+  bftGrain: string[];
+  grainGroups: GrainGroup[];
+  bftJoinChain: JoinLink[];
 }
 
 /**
