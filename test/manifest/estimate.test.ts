@@ -291,6 +291,84 @@ describe("estimateTableRows — reference manifests", () => {
   });
 });
 
+describe("estimateTableRows — relationship metrics", () => {
+  it("relationship metric chain starts from both between entities", () => {
+    const manifest: Manifest = {
+      entities,
+      relationships: [
+        { ...enrollment, metrics: [{ name: "enrollment_grade", type: "float", nature: "additive" }] },
+        assignment,
+      ],
+      propagations: [],
+      bft_tables: [{
+        name: "test",
+        entities: ["Student", "Class"],
+        metrics: ["enrollment_grade"],
+      }],
+    };
+    const result = estimateTableRows(manifest, manifest.bft_tables[0]);
+    // enrollment_grade home grain = {Student, Class}, both in BFT grain
+    // Chain covers both entities → M-M join → 120,000 rows
+    assert.equal(result.rows, 120000);
+    // No placeholder rows — home grain = BFT grain, no propagation
+    assert.equal(result.placeholder_row_count, 0);
+  });
+
+  it("relationship metric with propagation adds target to chain", () => {
+    const manifest: Manifest = {
+      entities,
+      relationships: [
+        { ...enrollment, metrics: [{ name: "enrollment_grade", type: "float", nature: "additive" }] },
+        assignment,
+      ],
+      propagations: [
+        {
+          metric: "enrollment_grade",
+          path: [
+            { relationship: "Assignment", target_entity: "Professor", strategy: "allocation", weight: "w" },
+          ],
+        },
+      ],
+      bft_tables: [{
+        name: "test",
+        entities: ["Student", "Class", "Professor"],
+        metrics: ["enrollment_grade"],
+      }],
+    };
+    const result = estimateTableRows(manifest, manifest.bft_tables[0]);
+    // Student × Class × Professor = 120,000 × (1,800/1,200) = 180,000
+    assert.equal(result.rows, 180000);
+  });
+
+  it("relationship metric with partial grain coverage", () => {
+    // enrollment_grade on Enrollment (Student×Class), but BFT only has Class+Professor
+    // Student not in grain → only Class seed from home grain
+    const manifest: Manifest = {
+      entities,
+      relationships: [
+        { ...enrollment, metrics: [{ name: "enrollment_grade", type: "float", nature: "additive" }] },
+        assignment,
+      ],
+      propagations: [
+        {
+          metric: "enrollment_grade",
+          path: [
+            { relationship: "Assignment", target_entity: "Professor", strategy: "allocation", weight: "w" },
+          ],
+        },
+      ],
+      bft_tables: [{
+        name: "test",
+        entities: ["Class", "Professor"],
+        metrics: ["enrollment_grade"],
+      }],
+    };
+    const result = estimateTableRows(manifest, manifest.bft_tables[0]);
+    // Class seed from home grain, Professor from propagation → Class × Professor = Assignment links = 1,800
+    assert.equal(result.rows, 1800);
+  });
+});
+
 describe("fanOut", () => {
   it("computes fan-out for Enrollment", () => {
     // 120,000 links / 1,200 classes = 100 students per class

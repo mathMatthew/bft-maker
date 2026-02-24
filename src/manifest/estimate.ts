@@ -171,11 +171,14 @@ export function estimateTableRows(manifest: Manifest, table: BftTable): RowEstim
     if (!home.grain.some((e) => grainSet.has(e))) continue;
     const homeEntitiesInGrain = home.grain.filter((e) => grainSet.has(e));
 
+    // Foreign entities: grain entities not covered by the metric's home grain
+    const foreignEntities = grainEntities.filter((e) => !home.grain.includes(e));
+
     const prop = propMap.get(metricName);
     if (!prop) {
-      // No propagation = pure reserve. Needs placeholder rows if there are
-      // foreign entities in the grain (single-entity tables don't need them).
-      if (grainEntities.length > 1) {
+      // No propagation = pure reserve for all foreign entities.
+      // Needs placeholder rows if there are foreign entities in the grain.
+      if (foreignEntities.length > 0) {
         for (const e of homeEntitiesInGrain) placeholderEntities.add(e);
       }
     } else {
