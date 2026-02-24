@@ -367,6 +367,51 @@ bft_tables:
 
 ---
 
+## Relationship Metrics
+
+Metrics don't have to live on entities. A metric can live on a **relationship** — on the junction itself. Enrollment grade, for example, isn't a Student metric or a Class metric. It's a property of a specific enrollment: Student 7 in Class 3 got a 95.5.
+
+Relationship metrics are declared on the relationship in the manifest:
+
+```yaml
+relationships:
+  - name: Enrollment
+    between: [Student, Class]
+    type: many-to-many
+    estimated_links: 90
+    metrics:
+      - name: enrollment_grade
+        type: float
+        nature: additive
+```
+
+A relationship metric's **home grain** is both entities in the `between` pair. `enrollment_grade` lives at Student × Class — not Student alone, not Class alone. This means:
+
+- In a Student × Class BFT, `enrollment_grade` is at its natural grain. Every base row carries the metric directly from the junction table. No allocation or placeholder rows needed.
+- In a Student × Class × Professor BFT, `enrollment_grade` can propagate to Professor via allocation (just like entity metrics). Its propagation path starts from the junction grain and extends outward.
+- In a Class × Professor BFT, Student is not in the grain. The metric must be **summarized out** — computed at Student × Class × Professor, then aggregated down to Class × Professor via GROUP BY.
+
+### Summarization
+
+When a metric's compute grain includes entities not in the BFT grain, those entities must be summarized out. The generator computes the metric at its full grain (base join + weights), then adds a summarization step:
+
+```sql
+CREATE OR REPLACE TABLE cs_summarized AS
+SELECT class_id, class_name, professor_id, professor_name,
+       SUM(tuition_paid * 1.0 / enrollment_count / assignment_count) AS tuition_paid,
+       SUM(enrollment_grade * 1.0 / assignment_count) AS enrollment_grade
+FROM cs_weighted
+GROUP BY class_id, class_name, professor_id, professor_name;
+```
+
+Only allocation and sum_over_sum strategies survive summarization — SUM preserves their correctness. Elimination and reserve cannot be summarized. The validator catches this: if a metric requires summarization and its boundary strategy is elimination or reserve, validation fails with a clear error.
+
+### Grain Groups
+
+The planner organizes metrics into **grain groups** — metrics sharing the same compute grain. Each group gets its own base join, weights, and (optionally) summarization step. When all metrics compute at the BFT grain, there's one group and the SQL is identical to the pre-grain-aware output. When metrics compute at different grains, each group generates independently and the assembly combines them.
+
+---
+
 ## Special Relationships
 
 ### Multi-Role Entities

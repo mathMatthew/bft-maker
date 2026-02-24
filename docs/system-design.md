@@ -13,6 +13,7 @@ bft-maker/
 ├── src/
 │   ├── manifest/
 │   │   ├── types.ts              # Manifest schema (TypeScript interfaces)
+│   │   ├── helpers.ts            # MetricHome, buildMetricHomeMap, findMetricDef
 │   │   ├── validate.ts           # Manifest validation and consistency checks
 │   │   ├── estimate.ts           # Row count and cost estimators
 │   │   ├── graph.ts              # Graph utilities (connected components)
@@ -100,6 +101,7 @@ interface Relationship {
   type: "many-to-many" | "many-to-one";
   estimated_links: number;
   weight_column?: string;        // e.g., "assignment_share"
+  metrics?: MetricDef[];         // junction metrics (e.g., enrollment_grade)
 }
 
 /**
@@ -203,28 +205,55 @@ Example: Building → Month (60 links) and Program → Month (36 links), no metr
 ```typescript
 interface TablePlan {
   tableName: string;
-  entities: string[];             // grain entities
-  joinChain: JoinLink[];          // how to join entities through bridges
-  metrics: MetricPlan[];          // each metric's strategy per dimension
+  bftGrain: string[];              // declared BFT entities
+  grainGroups: GrainGroup[];       // one group per distinct computeGrain
+  bftJoinChain: JoinLink[];        // join chain for full BFT grain
+}
+
+interface GrainGroup {
+  id: string;                      // CTE naming prefix
+  grain: string[];                 // the shared computeGrain
+  joinChain: JoinLink[];           // how to join entities at this grain
+  metrics: MetricPlan[];           // metrics computed at this grain
+  needsSummarization: boolean;     // true if grain includes non-BFT entities
 }
 ```
 
-Each `MetricPlan` classifies the metric's behavior across all foreign dimensions: `fully_allocated`, `pure_reserve`, `pure_elimination`, `mixed` (elimination + reserve), or `sum_over_sum`. This classification drives SQL generation.
+Each `MetricPlan` tracks:
+- `home: MetricHome` — where the metric lives (entity or relationship, with grain)
+- `computeGrain` — entities at which the metric is computed (may differ from BFT grain)
+- `reserveDimensions` — BFT entities not in computeGrain
+- `summarizeOut` — computeGrain entities not in BFT grain (aggregated out)
+- `behavior` — classification: `fully_allocated`, `pure_reserve`, `pure_elimination`, `mixed`, or `sum_over_sum`
+
+The planner uses **lazy step selection**: for each metric, it walks the propagation path and only includes steps that reach BFT grain entities (or intermediate hops needed to get there). This produces the minimal computeGrain for each metric.
+
+Metrics with the same computeGrain are grouped into a `GrainGroup`. When all metrics compute at the BFT grain, there's one group and the output is identical to pre-grain-aware SQL.
 
 ### Generator
 
-A single module (`src/codegen/generator.ts`) takes a table plan and produces a complete SQL string with these sections:
+A single module (`src/codegen/generator.ts`) takes a table plan and produces a complete SQL string. The steps depend on whether summarization is needed:
 
+**Standard path** (compute grain = BFT grain):
 1. **Base join** — combination rows from entity joins through bridge tables
-2. **Weights** — window functions for allocation and sum/sum (COUNT-based equal shares)
-3. **Assembly** — UNION ALL of combination rows (with strategy expressions applied) and entity rows (reserve values, elimination corrections)
-4. **Validation** — assertion queries that return PASS/FAIL (SUM checks, per-entity checks, weight checks)
+2. **Weights** — window functions for allocation and sum/sum
+3. **Assembly** — UNION ALL of combination rows and entity rows (reserve/elimination)
+4. **Validation** — assertion queries (SUM checks, per-entity checks, weight checks)
+
+**Summarization path** (compute grain ⊃ BFT grain):
+1. **Base join** — at compute grain (includes entities to be summarized out)
+2. **Weights** — at compute grain
+3. **Summarization** — GROUP BY BFT grain entities, SUM metric expressions
+4. **Assembly** — from summarized table (no placeholder rows needed)
+5. **Validation** — SUM checks against source tables
 
 Each strategy maps to SQL patterns:
-- **Allocation** — divide metric value across combination rows using window function shares
+- **Allocation** — divide metric value using window function shares
 - **Elimination** — full value on combination rows, correction rows with negative offset
 - **Reserve** — metric value on home entity rows, zero on combination rows
-- **Sum/Sum** — raw value preserved, companion weight column for correct averaging
+- **Sum/Sum** — raw value preserved, companion weight column
+
+For relationship metrics, the metric column is selected from the junction table alias in the base join. No special SQL pattern is needed — the join chain already includes the junction table.
 
 No Jinja. No templating language. String interpolation from the manifest is the template engine. DuckDB is the current dialect; Spark SQL is a planned secondary target.
 
@@ -289,17 +318,18 @@ Pure function inputs and outputs. No SQL execution.
 
 The `data/` directory contains manifests exercising different patterns:
 
-- **university**: Students, Classes, Professors — multi-hop allocation, elimination, sum_over_sum
+- **university**: Students, Classes, Professors — multi-hop allocation, elimination, sum_over_sum, junction metrics (enrollment_grade), summarization (class_summary BFT)
 - **northwind**: Orders, Products — allocation by quantity, sum_over_sum for price
 - **university-ops**: Facilities + Admissions sharing Month — shared-dimension alignment, independent chains, UNION ALL estimation
 
-### Integration Tests (planned)
+### Integration Tests (DuckDB)
 
-Once codegen is implemented:
-1. Feed manifest to code generator
-2. Execute SQL against DuckDB with synthetic data
-3. Assert validation queries return zero rows
-4. Assert `SUM` of allocated metrics equals `SUM` of originals
+`test/codegen/generator.test.ts` includes DuckDB integration tests that:
+1. Generate SQL from manifest
+2. Execute against DuckDB with reference data
+3. Assert all validation queries return PASS
+4. Assert expected row counts (department_financial: 218, student_experience: 100, class_summary: 13)
+5. Assert SUM of junction metrics matches source junction table
 
 ---
 
