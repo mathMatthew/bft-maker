@@ -1,6 +1,6 @@
 import type { Entity, Relationship, Manifest, MetricPropagation, BftTable } from "./types.js";
 import { findConnectedComponents } from "./graph.js";
-import { buildMetricOwnerMap } from "./helpers.js";
+import { buildMetricHomeMap } from "./helpers.js";
 
 export interface RowEstimate {
   rows: number;
@@ -84,19 +84,19 @@ export function estimateRows(
  * with reserve or elimination metrics.
  */
 export function estimateTableRows(manifest: Manifest, table: BftTable): RowEstimate {
-  const metricOwner = buildMetricOwnerMap(manifest.entities);
+  const metricHome = buildMetricHomeMap(manifest.entities, manifest.relationships);
   const propMap = new Map(manifest.propagations.map((p) => [p.metric, p]));
   const entityMap = new Map(manifest.entities.map((e) => [e.name, e]));
   const grainEntities = table.entities;
   const grainSet = new Set(grainEntities);
 
   // Compute each metric's active entities in this table:
-  // home entity + propagation targets that are in the grain.
+  // home grain entities + propagation targets that are in the grain.
   const chains: Set<string>[] = [];
   for (const metricName of table.metrics) {
-    const owner = metricOwner.get(metricName);
-    if (!owner || !grainSet.has(owner.name)) continue;
-    const chain = new Set<string>([owner.name]);
+    const home = metricHome.get(metricName);
+    if (!home || !home.grain.some((e) => grainSet.has(e))) continue;
+    const chain = new Set<string>(home.grain.filter((e) => grainSet.has(e)));
     const prop = propMap.get(metricName);
     if (prop) {
       for (const edge of prop.path) {
@@ -164,25 +164,29 @@ export function estimateTableRows(manifest: Manifest, table: BftTable): RowEstim
   // negative offset so SUM equals the true total.
   const placeholderEntities = new Set<string>();
   for (const metricName of table.metrics) {
-    const owner = metricOwner.get(metricName);
-    if (!owner) continue;
+    const home = metricHome.get(metricName);
+    if (!home) continue;
 
-    // Only relevant if the owner entity is in the grain
-    if (!grainSet.has(owner.name)) continue;
+    // Only relevant if at least one home grain entity is in the BFT grain
+    if (!home.grain.some((e) => grainSet.has(e))) continue;
+    const homeEntitiesInGrain = home.grain.filter((e) => grainSet.has(e));
+
+    // Foreign entities: grain entities not covered by the metric's home grain
+    const foreignEntities = grainEntities.filter((e) => !home.grain.includes(e));
 
     const prop = propMap.get(metricName);
     if (!prop) {
-      // No propagation = pure reserve. Needs placeholder rows if there are
-      // foreign entities in the grain (single-entity tables don't need them).
-      if (grainEntities.length > 1) {
-        placeholderEntities.add(owner.name);
+      // No propagation = pure reserve for all foreign entities.
+      // Needs placeholder rows if there are foreign entities in the grain.
+      if (foreignEntities.length > 0) {
+        for (const e of homeEntitiesInGrain) placeholderEntities.add(e);
       }
     } else {
       // Only count hops whose target entity is in the grain
       for (const edge of prop.path) {
         if (!grainSet.has(edge.target_entity)) continue;
         if (edge.strategy === "reserve" || edge.strategy === "elimination") {
-          placeholderEntities.add(owner.name);
+          for (const e of homeEntitiesInGrain) placeholderEntities.add(e);
         }
       }
     }

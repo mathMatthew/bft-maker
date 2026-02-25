@@ -9,3 +9,4 @@ data/northwind/*
 !jest.config.js
 claude_next.sh
 claude_output.txt
+.claude/task-log

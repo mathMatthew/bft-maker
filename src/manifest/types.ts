@@ -29,6 +29,7 @@ export interface Relationship {
   type: "many-to-many" | "many-to-one";
   estimated_links: number;
   weight_column?: string;
+  metrics?: MetricDef[];
 }
 
 /**

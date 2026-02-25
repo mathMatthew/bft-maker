@@ -1,7 +1,25 @@
 import * as fs from "node:fs";
 import * as yaml from "js-yaml";
-import type { Manifest } from "./types.js";
+import type { Manifest, MetricPropagation, PropagationEdge } from "./types.js";
 import { DEFAULT_PLACEHOLDER_LABELS } from "./types.js";
+
+/** What the YAML parser produces before normalization — metric can be a list. */
+interface RawPropagation {
+  metric: string | string[];
+  path: PropagationEdge[];
+}
+
+/** Expand propagations where metric is an array into individual entries. */
+function expandPropagations(raw: RawPropagation[]): MetricPropagation[] {
+  const result: MetricPropagation[] = [];
+  for (const prop of raw) {
+    const names = Array.isArray(prop.metric) ? prop.metric : [prop.metric];
+    for (const name of names) {
+      result.push({ metric: name, path: prop.path });
+    }
+  }
+  return result;
+}
 
 /**
  * Parse a YAML string into a Manifest. The result is structurally unvalidated —
@@ -12,15 +30,15 @@ import { DEFAULT_PLACEHOLDER_LABELS } from "./types.js";
  * downstream runtime errors. Currently only semantic validation exists via validate().
  */
 export function parseManifest(yamlString: string): Manifest {
-  const raw = yaml.load(yamlString) as Manifest;
+  const raw = yaml.load(yamlString) as Record<string, unknown>;
   if (!raw || typeof raw !== "object") {
     throw new Error("Invalid manifest: expected a YAML object");
   }
   const manifest: Manifest = {
-    entities: raw.entities ?? [],
-    relationships: raw.relationships ?? [],
-    propagations: raw.propagations ?? [],
-    bft_tables: raw.bft_tables ?? [],
+    entities: (raw.entities ?? []) as Manifest["entities"],
+    relationships: (raw.relationships ?? []) as Manifest["relationships"],
+    propagations: expandPropagations((raw.propagations ?? []) as RawPropagation[]),
+    bft_tables: (raw.bft_tables ?? []) as Manifest["bft_tables"],
   };
   if (raw.placeholder_labels) {
     manifest.placeholder_labels = {

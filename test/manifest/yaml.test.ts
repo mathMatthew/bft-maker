@@ -107,6 +107,73 @@ relationships: []
     assert.deepStrictEqual(parsed.bft_tables, []);
   });
 
+  it("expands metric arrays in propagations", () => {
+    const yaml = `
+entities:
+  - name: Student
+    role: leaf
+    detail: true
+    estimated_rows: 100
+    metrics:
+      - name: tuition_paid
+        type: currency
+        nature: additive
+      - name: fees
+        type: currency
+        nature: additive
+      - name: deposits
+        type: currency
+        nature: additive
+relationships:
+  - name: Enrollment
+    between: [Student, Class]
+    type: many-to-many
+    estimated_links: 500
+propagations:
+  - metric: [tuition_paid, fees, deposits]
+    path:
+      - relationship: Enrollment
+        target_entity: Class
+        strategy: allocation
+        weight: enrollment_share
+`;
+    const parsed = parseManifest(yaml);
+    assert.equal(parsed.propagations.length, 3);
+    assert.equal(parsed.propagations[0].metric, "tuition_paid");
+    assert.equal(parsed.propagations[1].metric, "fees");
+    assert.equal(parsed.propagations[2].metric, "deposits");
+    // All share the same path structure
+    for (const prop of parsed.propagations) {
+      assert.equal(prop.path.length, 1);
+      assert.equal(prop.path[0].strategy, "allocation");
+      assert.equal(prop.path[0].target_entity, "Class");
+    }
+  });
+
+  it("mixes single-metric and array-metric propagations", () => {
+    const yaml = `
+entities: []
+propagations:
+  - metric: [a, b]
+    path:
+      - relationship: R1
+        target_entity: X
+        strategy: allocation
+        weight: w
+  - metric: c
+    path:
+      - relationship: R2
+        target_entity: Y
+        strategy: elimination
+`;
+    const parsed = parseManifest(yaml);
+    assert.equal(parsed.propagations.length, 3);
+    assert.equal(parsed.propagations[0].metric, "a");
+    assert.equal(parsed.propagations[1].metric, "b");
+    assert.equal(parsed.propagations[2].metric, "c");
+    assert.equal(parsed.propagations[2].path[0].strategy, "elimination");
+  });
+
   it("rejects non-object YAML", () => {
     assert.throws(() => parseManifest("just a string"), {
       message: /Invalid manifest/,
