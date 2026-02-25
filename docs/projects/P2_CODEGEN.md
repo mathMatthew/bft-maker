@@ -109,6 +109,6 @@ Implemented:
 - All 4 strategies: allocation (incl. multi-hop), elimination, reserve, sum_over_sum
 - Mixed elimination+reserve interaction for 3-entity tables
 - DuckDB integration tests: generated SQL → DuckDB → all validations pass
-- 69 tests total (9 codegen)
+- 84 tests total (10 codegen, after P3 additions)
 
 Next step: PR review (fresh context window). PR: #4

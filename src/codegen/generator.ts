@@ -23,6 +23,7 @@ export function generate(manifest: Manifest, options?: GenerateOptions): Generat
   const sm = options?.sourceMapping ?? defaultSourceMapping(manifest);
   const dataDir = options?.dataDir ?? ".";
   const plans = planAll(manifest, sm);
+  checkPrefixCollisions(plans);
 
   const loadDataSQL = generateLoadData(manifest, sm, dataDir);
   const tables = plans.map((plan) => ({
@@ -64,27 +65,69 @@ function generateLoadData(manifest: Manifest, sm: SourceMapping, dataDir: string
 function generateTableSQL(plan: TablePlan, manifest: Manifest, sm: SourceMapping): string {
   const sections: string[] = [];
   const prefix = tablePrefix(plan.tableName);
-  const label = manifest.placeholder_labels?.reserve ?? "<Unallocated>";
+  const rawLabel = manifest.placeholder_labels?.reserve ?? "<Unallocated>";
+  const label = rawLabel.replace(/'/g, "''");
   const allMetrics = plan.grainGroups.flatMap((g) => g.metrics);
 
   sections.push(headerComment(plan, sm));
 
-  // When there's one grain group whose grain matches the BFT grain,
-  // generate the standard 3-step SQL. When summarization is needed,
-  // generate at the compute grain then summarize down.
-  const group = plan.grainGroups[0];
+  // Split groups into BFT-grain (no summarization) and summarization groups.
+  // Non-summarization groups share one pipeline at BFT grain because their
+  // compute grains are subsets of the BFT grain — the base join includes all
+  // entities, and per-metric weights are computed from the shared base table.
+  const bftGroups = plan.grainGroups.filter((g) => !g.needsSummarization);
+  const sumGroups = plan.grainGroups.filter((g) => g.needsSummarization);
+  const bftMetrics = bftGroups.flatMap((g) => g.metrics);
 
-  if (!group.needsSummarization) {
-    // Standard path: base join at BFT grain
+  if (sumGroups.length === 0) {
+    // All metrics at BFT grain: merge groups into one standard pipeline
+    const mergedGroup: GrainGroup = {
+      id: "g0",
+      grain: plan.bftGrain,
+      joinChain: plan.bftJoinChain,
+      metrics: bftMetrics,
+      needsSummarization: false,
+    };
     sections.push(baseJoinSQL(plan.bftGrain, plan.bftJoinChain, allMetrics, sm, prefix));
-    sections.push(weightedSQL(group, sm, prefix));
+    sections.push(weightedSQL(mergedGroup, sm, prefix));
     sections.push(assemblySQL(plan, allMetrics, sm, prefix, label));
+  } else if (bftMetrics.length === 0) {
+    // All metrics need summarization
+    if (sumGroups.length === 1) {
+      // Single summarization group: standard summarization pipeline
+      const group = sumGroups[0];
+      sections.push(baseJoinSQL(group.grain, group.joinChain, allMetrics, sm, prefix));
+      sections.push(weightedSQL(group, sm, prefix));
+      sections.push(summarizationSQL(plan, group, allMetrics, sm, prefix));
+      sections.push(assemblySQL(plan, allMetrics, sm, prefix, label));
+    } else {
+      // Multiple summarization groups: per-group pipelines + combined assembly
+      for (const group of sumGroups) {
+        const gPrefix = `${prefix}_${group.id}`;
+        sections.push(baseJoinSQL(group.grain, group.joinChain, group.metrics, sm, gPrefix));
+        sections.push(weightedSQL(group, sm, gPrefix));
+        sections.push(summarizationSQL(plan, group, group.metrics, sm, gPrefix));
+      }
+      sections.push(multiGroupAssemblySQL(plan, allMetrics, bftMetrics, sumGroups, sm, prefix, label));
+    }
   } else {
-    // Summarization path: base join at compute grain, summarize down
-    sections.push(baseJoinSQL(group.grain, group.joinChain, allMetrics, sm, prefix));
-    sections.push(weightedSQL(group, sm, prefix));
-    sections.push(summarizationSQL(plan, group, allMetrics, sm, prefix));
-    sections.push(assemblySQL(plan, allMetrics, sm, prefix, label));
+    // Mixed: BFT-grain pipeline + summarization group pipelines + combined assembly
+    const mergedBftGroup: GrainGroup = {
+      id: "bft",
+      grain: plan.bftGrain,
+      joinChain: plan.bftJoinChain,
+      metrics: bftMetrics,
+      needsSummarization: false,
+    };
+    sections.push(baseJoinSQL(plan.bftGrain, plan.bftJoinChain, bftMetrics, sm, prefix));
+    sections.push(weightedSQL(mergedBftGroup, sm, prefix));
+    for (const group of sumGroups) {
+      const gPrefix = `${prefix}_${group.id}`;
+      sections.push(baseJoinSQL(group.grain, group.joinChain, group.metrics, sm, gPrefix));
+      sections.push(weightedSQL(group, sm, gPrefix));
+      sections.push(summarizationSQL(plan, group, group.metrics, sm, gPrefix));
+    }
+    sections.push(multiGroupAssemblySQL(plan, allMetrics, bftMetrics, sumGroups, sm, prefix, label));
   }
 
   sections.push(validationSQL(plan, allMetrics, sm));
@@ -98,6 +141,21 @@ function tablePrefix(tableName: string): string {
     .split("_")
     .map((w) => w[0])
     .join("");
+}
+
+/** Verify no two tables produce the same intermediate-table prefix. */
+function checkPrefixCollisions(plans: TablePlan[]): void {
+  const seen = new Map<string, string>();
+  for (const plan of plans) {
+    const prefix = tablePrefix(plan.tableName);
+    const existing = seen.get(prefix);
+    if (existing) {
+      throw new Error(
+        `Table prefix collision: "${existing}" and "${plan.tableName}" both produce prefix "${prefix}". Rename one table to avoid ambiguous intermediate tables.`
+      );
+    }
+    seen.set(prefix, plan.tableName);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -122,12 +180,24 @@ function headerComment(plan: TablePlan, sm: SourceMapping): string {
 // Step 1: Base grain join
 // ---------------------------------------------------------------------------
 
-function entityAlias(entityName: string): string {
-  return entityName.toLowerCase().slice(0, 1);
-}
-
-function junctionAlias(relName: string): string {
-  return relName.toLowerCase().slice(0, 1);
+/**
+ * Build collision-free single-letter aliases for a set of names.
+ * Uses first letter of lowercase name; appends digits on collision.
+ */
+function buildAliasMap(names: string[]): Map<string, string> {
+  const result = new Map<string, string>();
+  const used = new Set<string>();
+  for (const name of names) {
+    let alias = name.toLowerCase().slice(0, 1);
+    if (used.has(alias)) {
+      let i = 2;
+      while (used.has(alias + i)) i++;
+      alias = alias + i;
+    }
+    used.add(alias);
+    result.set(name, alias);
+  }
+  return result;
 }
 
 /** Get the primary home entity for a metric (first grain entity). */
@@ -142,9 +212,13 @@ function baseJoinSQL(
   sm: SourceMapping,
   prefix: string
 ): string {
+  // Build collision-free aliases for all entities and relationships in the query
+  const allNames = [...grainEntities, ...joinChain.map((l) => l.relationship)];
+  const aliasMap = buildAliasMap(allNames);
+
   const firstEntity = grainEntities[0];
   const fe = sm.entities[firstEntity];
-  const firstAlias = entityAlias(firstEntity);
+  const firstAlias = aliasMap.get(firstEntity)!;
 
   // Track which junction tables are used (for relationship metrics)
   const junctionAliasMap = new Map<string, string>();
@@ -153,7 +227,7 @@ function baseJoinSQL(
   const selectCols: string[] = [];
   for (const entityName of grainEntities) {
     const es = sm.entities[entityName];
-    const alias = entityAlias(entityName);
+    const alias = aliasMap.get(entityName)!;
     selectCols.push(`${alias}.${es.idColumn}`);
     selectCols.push(`${alias}.${es.labelColumn} AS ${entityName.toLowerCase()}_name`);
     // Entity metrics
@@ -166,17 +240,14 @@ function baseJoinSQL(
   }
 
   // JOIN chain — build it and collect junction aliases
-  const aliases = new Map<string, string>();
-  aliases.set(firstEntity, firstAlias);
   const joinLines: string[] = [];
 
   for (const link of joinChain) {
-    const jAlias = junctionAlias(link.relationship);
-    const toAlias = entityAlias(link.toEntity);
-    aliases.set(link.toEntity, toAlias);
+    const jAlias = aliasMap.get(link.relationship)!;
+    const toAlias = aliasMap.get(link.toEntity)!;
     junctionAliasMap.set(link.relationship, jAlias);
 
-    const fromAlias = aliases.get(link.fromEntity)!;
+    const fromAlias = aliasMap.get(link.fromEntity)!;
     joinLines.push(
       `JOIN ${link.junctionTable} ${jAlias} ON ${fromAlias}.${sm.entities[link.fromEntity].idColumn} = ${jAlias}.${link.fromColumn}`
     );
@@ -313,17 +384,20 @@ function collectWeights(group: GrainGroup, sm: SourceMapping): WeightExpr[] {
 function summarizationSQL(
   plan: TablePlan,
   group: GrainGroup,
-  allMetrics: MetricPlan[],
+  metrics: MetricPlan[],
   sm: SourceMapping,
   prefix: string
 ): string {
-  const bftGrainSet = new Set(plan.bftGrain);
+  // GROUP BY BFT grain entities that are in this group's compute grain.
+  // (For single-group tables, this is all BFT entities. For multi-group,
+  // some BFT entities may be reserve dimensions not in this group's grain.)
+  const groupGrainSet = new Set(group.grain);
+  const bftEntitiesInGrain = plan.bftGrain.filter((e) => groupGrainSet.has(e));
 
-  // GROUP BY columns: BFT grain entity ids and names
   const groupByCols: string[] = [];
   const selectCols: string[] = [];
 
-  for (const entityName of plan.bftGrain) {
+  for (const entityName of bftEntitiesInGrain) {
     const es = sm.entities[entityName];
     groupByCols.push(es.idColumn);
     groupByCols.push(`${entityName.toLowerCase()}_name`);
@@ -332,7 +406,7 @@ function summarizationSQL(
   }
 
   // Metric expressions: SUM for allocated/eliminated, SUM for value and SUM for weight for sum_over_sum
-  for (const metric of allMetrics) {
+  for (const metric of metrics) {
     if (metric.behavior === "fully_allocated") {
       // Allocation expression from the weighted table, then sum
       selectCols.push(`SUM(${allocationExpr(metric, sm)}) AS ${metric.name}`);
@@ -348,7 +422,7 @@ function summarizationSQL(
 
   return [
     `${"-".repeat(71)}`,
-    `-- Step 2.5: Summarize to BFT grain (${plan.bftGrain.join(" x ")})`,
+    `-- Step 2.5: Summarize to BFT grain (${bftEntitiesInGrain.join(" x ")})`,
     `${"-".repeat(71)}`,
     `CREATE OR REPLACE TABLE ${prefix}_summarized AS`,
     `SELECT`,
@@ -408,6 +482,125 @@ function assemblySQL(
     "",
     unionAll + ";",
   ].join("\n");
+}
+
+/**
+ * Assembly for tables with mixed BFT-grain and summarization groups.
+ * BFT-grain metrics come from `prefix_weighted`, placeholder branches as usual.
+ * Summarization groups each contribute a base branch from their summarized table.
+ */
+function multiGroupAssemblySQL(
+  plan: TablePlan,
+  allMetrics: MetricPlan[],
+  bftMetrics: MetricPlan[],
+  sumGroups: GrainGroup[],
+  sm: SourceMapping,
+  prefix: string,
+  placeholderLabel: string
+): string {
+  const branches: string[] = [];
+
+  // BFT-grain base branch (from merged BFT pipeline, if it exists)
+  if (bftMetrics.length > 0) {
+    branches.push(groupBaseBranch(plan, {
+      id: "bft", grain: plan.bftGrain, joinChain: plan.bftJoinChain,
+      metrics: bftMetrics, needsSummarization: false,
+    }, allMetrics, sm, `${prefix}_weighted`, placeholderLabel));
+
+    // Placeholder branches for BFT-grain metrics
+    for (const metric of bftMetrics) {
+      if (metric.behavior === "fully_allocated" || metric.behavior === "sum_over_sum") continue;
+      if (metric.behavior === "pure_reserve") {
+        branches.push(reserveBranch(plan, metric, allMetrics, sm, placeholderLabel));
+      } else if (metric.behavior === "pure_elimination") {
+        branches.push(eliminationCorrectionBranch(plan, metric, allMetrics, sm, prefix, placeholderLabel));
+      } else if (metric.behavior === "mixed") {
+        branches.push(mixedElimDataBranch(plan, metric, allMetrics, sm, placeholderLabel));
+        branches.push(mixedElimCorrectionBranch(plan, metric, allMetrics, sm, placeholderLabel));
+      }
+    }
+  }
+
+  // Summarization groups contribute base branches from their summarized tables
+  for (const group of sumGroups) {
+    const gPrefix = `${prefix}_${group.id}`;
+    branches.push(groupBaseBranch(plan, group, allMetrics, sm, `${gPrefix}_summarized`, placeholderLabel));
+  }
+
+  const unionAll = branches.join("\n\nUNION ALL\n\n");
+
+  return [
+    `${"-".repeat(71)}`,
+    `-- Step 3: Assemble final table`,
+    `${"-".repeat(71)}`,
+    `CREATE OR REPLACE TABLE ${plan.tableName} AS`,
+    "",
+    unionAll + ";",
+  ].join("\n");
+}
+
+/**
+ * Base branch for one grain group in a multi-group table.
+ * Outputs real entity columns for entities in the group's grain,
+ * placeholder labels for BFT entities not in the group's grain,
+ * metric expressions for the group's metrics, and 0 for other metrics.
+ */
+function groupBaseBranch(
+  plan: TablePlan,
+  group: GrainGroup,
+  allMetrics: MetricPlan[],
+  sm: SourceMapping,
+  sourceTable: string,
+  label: string
+): string {
+  const groupGrainSet = new Set(group.grain);
+  const groupMetricNames = new Set(group.metrics.map((m) => m.name));
+  const lines: string[] = [`-- ${group.id} base rows`];
+  lines.push("SELECT");
+
+  const cols: string[] = [];
+  for (const entityName of plan.bftGrain) {
+    const es = sm.entities[entityName];
+    if (groupGrainSet.has(entityName)) {
+      cols.push(es.idColumn);
+      cols.push(`${entityName.toLowerCase()}_name`);
+    } else {
+      cols.push(`NULL AS ${es.idColumn}`);
+      cols.push(`'${label}' AS ${entityName.toLowerCase()}_name`);
+    }
+  }
+
+  for (const metric of allMetrics) {
+    if (groupMetricNames.has(metric.name)) {
+      // This metric belongs to this group
+      if (group.needsSummarization) {
+        cols.push(`${metric.name}`);
+        if (metric.behavior === "sum_over_sum") {
+          cols.push(`${metric.name}_weight`);
+        }
+      } else if (metric.behavior === "fully_allocated") {
+        cols.push(allocationExpr(metric, sm) + ` AS ${metric.name}`);
+      } else if (metric.behavior === "sum_over_sum") {
+        cols.push(`${metric.name}`);
+        cols.push(sumOverSumWeightExpr(metric) + ` AS ${metric.name}_weight`);
+      } else if (metric.behavior === "pure_elimination") {
+        cols.push(`${metric.name} * 1.0 AS ${metric.name}`);
+      } else {
+        // pure_reserve, mixed: 0 on base rows
+        cols.push(`0.0 AS ${metric.name}`);
+      }
+    } else {
+      // Metric from another group: 0
+      cols.push(`0.0 AS ${metric.name}`);
+      if (metric.behavior === "sum_over_sum") {
+        cols.push(`0 AS ${metric.name}_weight`);
+      }
+    }
+  }
+
+  lines.push(cols.map((c) => `    ${c}`).join(",\n"));
+  lines.push(`FROM ${sourceTable}`);
+  return lines.join("\n");
 }
 
 /**
@@ -608,12 +801,20 @@ function mixedElimDataBranch(
   }
 
   // Subquery: join home entity to elimination-target entities via junction tables
+  // Build collision-free aliases for all tables in the subquery
+  const subTableNames = [
+    homeEs.table,
+    ...elimDims.map((d) => sm.entities[d.entity].table),
+    ...elimDims.map((d) => sm.relationships[d.relationship].table),
+  ];
+  const subAliasMap = buildAliasMap(subTableNames);
+
   const subCols: string[] = [];
-  const homeAlias = homeEs.table[0];
+  const homeAlias = subAliasMap.get(homeEs.table)!;
   // Elimination target entities
   for (const elimDim of elimDims) {
     const targetEs = sm.entities[elimDim.entity];
-    const targetAlias = targetEs.table[0];
+    const targetAlias = subAliasMap.get(targetEs.table)!;
     subCols.push(`${targetAlias}.${targetEs.idColumn}`);
     subCols.push(`${targetAlias}.${targetEs.labelColumn} AS ${elimDim.entity.toLowerCase()}_name`);
   }
@@ -626,15 +827,15 @@ function mixedElimDataBranch(
   for (const elimDim of elimDims) {
     const relSource = sm.relationships[elimDim.relationship];
     const targetEs = sm.entities[elimDim.entity];
-    const targetAlias = targetEs.table[0];
-    const jAlias = relSource.table[0];
+    const targetAlias = subAliasMap.get(targetEs.table)!;
+    const jAlias = subAliasMap.get(relSource.table)!;
     subJoins.push(`    JOIN ${relSource.table} ${jAlias} ON ${targetAlias}.${targetEs.idColumn} = ${jAlias}.${relSource.columns[elimDim.entity]}`);
     subJoins.push(`    JOIN ${homeEs.table} ${homeAlias} ON ${homeAlias}.${homeEs.idColumn} = ${jAlias}.${relSource.columns[home]}`);
   }
 
   // First elimination target is the FROM table
   const firstTarget = sm.entities[elimDims[0].entity];
-  const firstAlias = firstTarget.table[0];
+  const firstAlias = subAliasMap.get(firstTarget.table)!;
 
   const lines = [
     `-- ${metric.name} elimination data rows`,

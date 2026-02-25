@@ -1,7 +1,7 @@
 # P3: Grain-Aware Code Generator
 
-**Status**: Complete, pending PR review
-**Branch**: `feat/grain-aware-codegen` (create from `feat/reference-sql`)
+**Status**: Complete — PR #4 reviewed, review fixes applied
+**Branch**: `feat/reference-sql`
 
 ## Goal
 
@@ -279,6 +279,20 @@ Add `enrollment_grade` column to `data/university/enrollments.csv`.
 
 ## Verification
 
-1. `npm test` -- all existing 71 tests pass (backward compatible)
+1. `npm test` -- all 84 tests pass
 2. New DuckDB integration tests pass for junction metrics and summarization
 3. Generated SQL for existing manifests is structurally identical (same row counts, same validation results)
+
+## PR Review Fixes (applied 2026-02-24)
+
+Bugs:
+- Escape single quotes in placeholder labels (SQL injection prevention)
+- Fix `checkSummarizationValidity` to only check boundary-crossing edges, not all in-grain hops
+- Add connectivity check in `buildJoinChain` (throw if BFS can't reach all entities)
+- Replace single-letter `entityAlias`/`junctionAlias` with collision-safe `buildAliasMap`
+- Support multiple grain groups in generator (merge non-summarization groups into one BFT pipeline, per-group pipelines for summarization groups)
+
+Cleanup:
+- Remove `.claude/task-log` from git, add to `.gitignore`
+- Remove dead code: unused `summarizeOutCount` param, unreachable condition, unused variable
+- Fix doc inaccuracies (branch reference, test count)

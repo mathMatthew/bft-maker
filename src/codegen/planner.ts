@@ -140,7 +140,7 @@ function planMetric(
     })),
   ];
 
-  const behavior = classifyBehavior(allDimensions, nature, reserveDimensions.length, summarizeOut.length);
+  const behavior = classifyBehavior(allDimensions, nature, reserveDimensions.length);
 
   return {
     name: metricName,
@@ -157,8 +157,7 @@ function planMetric(
 function classifyBehavior(
   dimensions: DimensionStrategy[],
   nature: "additive" | "non-additive",
-  reserveCount: number,
-  summarizeOutCount: number
+  reserveCount: number
 ): MetricBehavior {
   if (nature === "non-additive") return "sum_over_sum";
   if (dimensions.length === 0) return "fully_allocated";
@@ -171,7 +170,6 @@ function classifyBehavior(
     if (only === "reserve") return "pure_reserve";
   }
   if (strategies.has("elimination") && strategies.has("reserve")) return "mixed";
-  if (strategies.has("allocation") && strategies.size === 1 && reserveCount === 0) return "fully_allocated";
   return "mixed";
 }
 
@@ -196,7 +194,6 @@ function buildGrainGroups(
   for (const [key, groupMetrics] of groups) {
     const grain = groupMetrics[0].computeGrain;
     const joinChain = buildJoinChain(grain, relationships, sourceMapping);
-    const bftGrainSet = new Set(grain);
     const needsSummarization = groupMetrics.some((m) => m.summarizeOut.length > 0);
 
     result.push({
@@ -256,6 +253,11 @@ export function buildJoinChain(
         toColumn: relSource.columns[neighbor],
       });
     }
+  }
+
+  if (visited.size !== entities.length) {
+    const missing = entities.filter((e) => !visited.has(e));
+    throw new Error(`Cannot connect entities: ${missing.join(", ")} unreachable from ${entities[0]}`);
   }
 
   return chain;

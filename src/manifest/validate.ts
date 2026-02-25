@@ -410,16 +410,24 @@ function checkSummarizationValidity(
       const prop = propMap.get(metricName);
       if (!prop) continue; // caught by checkUnreachableMetrics
 
+      // Walk the path tracking which entities we've reached.
+      // Only check strategy on edges that cross from outside-grain to inside-grain.
+      const reached = new Set<string>(home.grain);
       for (const edge of prop.path) {
-        if (!grainSet.has(edge.target_entity)) continue;
-        // This hop crosses into BFT grain — its strategy must support summarization
-        if (edge.strategy === "elimination" || edge.strategy === "reserve") {
-          errors.push({
-            rule: "summarization-strategy",
-            message: `Table "${table.name}": metric "${metricName}" requires summarization (${homeNotInGrain.join(", ")} not in grain) but uses "${edge.strategy}" at boundary — only allocation or sum_over_sum can be summarized`,
-            path: `bft_tables.${table.name}.metrics.${metricName}`,
-          });
+        const sourceInGrain = [...reached].some((e) => grainSet.has(e));
+        const targetInGrain = grainSet.has(edge.target_entity);
+
+        if (!sourceInGrain && targetInGrain) {
+          // This hop crosses the boundary into BFT grain
+          if (edge.strategy === "elimination" || edge.strategy === "reserve") {
+            errors.push({
+              rule: "summarization-strategy",
+              message: `Table "${table.name}": metric "${metricName}" requires summarization (${homeNotInGrain.join(", ")} not in grain) but uses "${edge.strategy}" at boundary — only allocation or sum_over_sum can be summarized`,
+              path: `bft_tables.${table.name}.metrics.${metricName}`,
+            });
+          }
         }
+        reached.add(edge.target_entity);
       }
     }
   }
