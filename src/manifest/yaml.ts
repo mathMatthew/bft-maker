@@ -15,7 +15,7 @@ function expandPropagations(raw: RawPropagation[]): MetricPropagation[] {
   for (const prop of raw) {
     const names = Array.isArray(prop.metric) ? prop.metric : [prop.metric];
     for (const name of names) {
-      result.push({ metric: name, path: prop.path });
+      result.push({ metric: name, path: prop.path.map((e) => ({ ...e })) });
     }
   }
   return result;

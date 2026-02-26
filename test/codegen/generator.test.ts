@@ -32,20 +32,22 @@ describe("planner", () => {
 
     const allMetrics = plan.grainGroups.flatMap((g) => g.metrics);
 
-    // tuition_paid: fully_allocated (allocation to Class and Professor)
+    // tuition_paid: allocation to Class and Professor, no reserve dims
     const tuition = allMetrics.find((m) => m.name === "tuition_paid")!;
-    assert.equal(tuition.behavior, "fully_allocated");
     assert.equal(tuition.home.grain[0], "Student");
+    assert.equal(tuition.reserveDimensions.length, 0);
+    assert.ok(tuition.propagatedDimensions.every((d) => d.strategy === "allocation" || d.strategy === "reserve"));
 
-    // class_budget: mixed (elimination to Student, reserve for Professor)
+    // class_budget: elimination to Student, reserve for Professor
     const budget = allMetrics.find((m) => m.name === "class_budget")!;
-    assert.equal(budget.behavior, "mixed");
     assert.equal(budget.home.grain[0], "Class");
+    assert.ok(budget.propagatedDimensions.some((d) => d.strategy === "elimination"));
+    assert.ok(budget.reserveDimensions.length > 0);
 
-    // salary: pure_reserve (no propagation)
+    // salary: no propagation (all foreign entities are reserve)
     const salary = allMetrics.find((m) => m.name === "salary")!;
-    assert.equal(salary.behavior, "pure_reserve");
     assert.equal(salary.home.grain[0], "Professor");
+    assert.ok(salary.reserveDimensions.length > 0);
   });
 
   it("plans student_experience with correct strategies", () => {
@@ -58,13 +60,14 @@ describe("planner", () => {
     const allMetrics = plan.grainGroups.flatMap((g) => g.metrics);
 
     const tuition = allMetrics.find((m) => m.name === "tuition_paid")!;
-    assert.equal(tuition.behavior, "fully_allocated");
+    assert.equal(tuition.reserveDimensions.length, 0);
 
     const satisfaction = allMetrics.find((m) => m.name === "satisfaction_score")!;
-    assert.equal(satisfaction.behavior, "sum_over_sum");
+    assert.equal(satisfaction.nature, "non-additive");
 
     const budget = allMetrics.find((m) => m.name === "class_budget")!;
-    assert.equal(budget.behavior, "pure_elimination");
+    assert.ok(budget.propagatedDimensions.some((d) => d.strategy === "elimination"));
+    assert.equal(budget.reserveDimensions.length, 0);
   });
 });
 
@@ -74,36 +77,36 @@ describe("generator", () => {
   it("generates SQL for all tables", () => {
     const output = generate(manifest, { dataDir: "data/university" });
 
-    assert.ok(output.loadDataSQL.includes("CREATE OR REPLACE TABLE students"));
-    assert.ok(output.loadDataSQL.includes("CREATE OR REPLACE TABLE enrollments"));
+    assert.ok(output.loadDataSQL.includes('CREATE OR REPLACE TABLE "students"'));
+    assert.ok(output.loadDataSQL.includes('CREATE OR REPLACE TABLE "enrollments"'));
     assert.equal(output.tables.length, 3);
 
     const df = output.tables.find((t) => t.name === "department_financial")!;
-    assert.ok(df.sql.includes("CREATE OR REPLACE TABLE df_base"));
-    assert.ok(df.sql.includes("CREATE OR REPLACE TABLE df_weighted"));
-    assert.ok(df.sql.includes("CREATE OR REPLACE TABLE department_financial"));
+    assert.ok(df.sql.includes('CREATE OR REPLACE TABLE "df_base"'));
+    assert.ok(df.sql.includes('CREATE OR REPLACE TABLE "df_weighted"'));
+    assert.ok(df.sql.includes('CREATE OR REPLACE TABLE "department_financial"'));
     // Multi-hop allocation
     assert.ok(df.sql.includes("enrollment_count"));
     assert.ok(df.sql.includes("assignment_count"));
     // Reserve branch for salary
     assert.ok(df.sql.includes("Reserve placeholder rows for salary"));
-    // Mixed branches for class_budget
-    assert.ok(df.sql.includes("class_budget elimination data rows"));
+    // Propagation + correction branches for class_budget
+    assert.ok(df.sql.includes("class_budget propagation data rows"));
     assert.ok(df.sql.includes("class_budget elimination correction rows"));
 
     const se = output.tables.find((t) => t.name === "student_experience")!;
-    assert.ok(se.sql.includes("CREATE OR REPLACE TABLE se_base"));
-    assert.ok(se.sql.includes("Elimination correction rows for class_budget"));
+    assert.ok(se.sql.includes('CREATE OR REPLACE TABLE "se_base"'));
+    assert.ok(se.sql.includes("class_budget elimination correction rows"));
     // Sum/Sum weight
     assert.ok(se.sql.includes("satisfaction_score_weight"));
     // Junction metric
     assert.ok(se.sql.includes("enrollment_grade"));
 
     const cs = output.tables.find((t) => t.name === "class_summary")!;
-    assert.ok(cs.sql.includes("CREATE OR REPLACE TABLE cs_base"));
+    assert.ok(cs.sql.includes('CREATE OR REPLACE TABLE "cs_base"'));
     // Summarization step
     assert.ok(cs.sql.includes("Summarize to BFT grain"));
-    assert.ok(cs.sql.includes("CREATE OR REPLACE TABLE cs_summarized"));
+    assert.ok(cs.sql.includes('CREATE OR REPLACE TABLE "cs_summarized"'));
   });
 
   it("generates valid run script", () => {

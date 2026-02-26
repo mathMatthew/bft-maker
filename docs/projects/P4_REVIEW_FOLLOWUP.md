@@ -3,49 +3,57 @@
 ## Goal
 Address issues surfaced during the PR #4 code review that weren't blocking merge.
 
-## Status: Pending
+## Status: In Progress
+
+## Current State
+**9 of 23 items resolved** (1–7, 15, 16). All on branch `fix/validator-summarization-reserve`. 81 tests pass.
+
+Key changes so far:
+- Removed `checkSummarizationValidity` — all strategies survive summarization (elimination correction rows sum correctly through GROUP BY)
+- Prohibited reserve as a propagation edge strategy (it's the implicit default)
+- Fixed estimator placeholder counting for relationship metrics (use `estimated_links`)
+- Added `q()` SQL identifier quoting throughout generator.ts
+- Fixed shared path reference in YAML expansion, removed unused var
+- **Removed `classifyBehavior` and `MetricBehavior` entirely** — strategies now compose as independent pipeline steps instead of being classified into monolithic behavior categories. Fixes the broken elimination + allocation combo case. See item #4 for details.
 
 ## Issues
 
 ### Correctness
 
-1. **Validator misses intermediate-hop summarization check**
-   `validate.ts` `checkSummarizationValidity` only checks when `homeNotInGrain.length > 0`. Misses the case where a metric's home entity IS in the BFT grain but its propagation path passes through an intermediate entity needing summarization with an unsupported strategy (e.g., metric on A, path A->B->C, grain={A,C}, A->B uses elimination — validator won't catch it).
+1. ~~**Validator misses intermediate-hop summarization check**~~ → **RESOLVED: removed `checkSummarizationValidity` entirely.** The premise was wrong: all propagation strategies survive summarization. Elimination's correction rows sum correctly through GROUP BY + SUM. The "compute at full grain, then summarize" model works for every strategy. Additionally, reserve was prohibited as a propagation edge strategy (it's the implicit default when an entity is omitted from the path). Updated spec.md accordingly.
 
-2. **Estimator placeholder count wrong for relationship metrics with reserve**
-   `estimate.ts` ~lines 171-189: For a relationship metric (home grain={Student, Class}) with a reserve dimension, placeholder rows are estimated as `student_rows + class_rows`. Should use `estimated_links` for relationship metrics. No current manifest triggers this.
+2. ~~**Estimator placeholder count wrong for relationship metrics with reserve**~~ → **RESOLVED.** Refactored placeholder counting to track by home (entity or relationship name) instead of individual entities. Relationship metrics now use `estimated_links`; entity metrics use `entity.estimated_rows`. Also removed dead `reserve` strategy check from propagation edges (reserve in paths is now prohibited by the validator).
 
-3. **No SQL identifier quoting**
-   Throughout `generator.ts`, entity/metric/table/column names are interpolated into SQL without quoting. SQL reserved words (e.g., entity named `Order`, metric named `select`) produce invalid SQL. DuckDB supports `"quoted_identifiers"`.
+3. ~~**No SQL identifier quoting**~~ → **RESOLVED.** Added `q()` helper that wraps all SQL identifiers in DuckDB double-quotes. Applied to all table names, column names, metric names, derived names, and intermediate table names throughout `generator.ts`. DuckDB integration tests confirm the quoted SQL is valid.
 
-4. **`mixedElimCorrectionBranch` only handles first elimination dimension**
-   `generator.ts` ~line 871 — only `elimDims[0]` is used. If a metric has elimination toward multiple dimensions, only the first is corrected. The validator currently prevents this, but the assumption isn't documented or enforced in the generator.
+4. ~~**`mixed` behavior classification is too coarse**~~ → **RESOLVED: removed behavior classification entirely.** The `classifyBehavior` function and `MetricBehavior` type were deleted. Each propagation strategy is now handled independently:
+   - Base grain rows check `reserveDimensions.length` and `metric.nature` directly instead of a behavior label
+   - `propagationDataBranch` (new): SELECT DISTINCT from weighted table for metrics with reserve dims + propagation — handles any strategy combo
+   - `elimCorrectionBranch` (new): uses COUNT(DISTINCT target_id) from base table — works regardless of reserve dims
+   - `collectWeights` now generates weights for ANY metric with allocation dims (previously skipped mixed/elim metrics) and partitions by ALL prior hops regardless of strategy
+   - Verified mathematically: all 4 two-hop strategy combos (elim+elim, elim+alloc, alloc+elim, alloc+alloc) compose correctly as independent pipeline steps
 
-5. **Shared path reference in `expandPropagations`**
-   `yaml.ts` ~line 18: When `metric: [a, b, c]` is expanded, all propagations share the same `path` array object. Nothing currently mutates paths post-parse, but it's a mutation-aliasing landmine. Fix: `path: prop.path.map(e => ({...e}))`.
+5. ~~**Shared path reference in `expandPropagations`**~~ → **RESOLVED.** Each expanded propagation now gets a shallow copy of each path edge via `prop.path.map(e => ({...e}))`.
 
 ### Code Quality
 
-6. **Inline `import(...)` type in planner signature**
-   `planner.ts` ~line 89 uses `import("../manifest/types.js").Strategy` instead of the already-available `Strategy` type.
+6. ~~**Inline `import(...)` type in planner signature**~~ → **RESOLVED.** Changed to use the already-imported `Strategy` type from manifest/types.
 
-7. **Unused variable `elimEntityCol`**
-   `generator.ts` ~line 884: computed but never used.
+7. ~~**Unused variable `elimEntityCol`**~~ → **RESOLVED.** Removed.
 
 8. **Run script hardcodes directory depth**
    `generator.ts` ~line 1003: `REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"` assumes output is exactly 3 levels below repo root.
 
 9. **Missing type re-exports from `codegen/index.ts`**
-   `GrainGroup`, `JoinLink`, `DimensionStrategy`, `MetricBehavior` are used in exported `TablePlan`/`MetricPlan` types but aren't re-exported.
+   `GrainGroup`, `JoinLink`, `DimensionStrategy` are used in exported `TablePlan`/`MetricPlan` types but aren't re-exported. (`MetricBehavior` no longer exists.)
 
 10. **`baseGrainBranch` vs `groupBaseBranch` logic duplication**
     These two functions duplicate significant logic and could be unified.
 
 11. **`buildAliasMap` not used consistently across branch functions**
-    `reserveBranch`, `eliminationCorrectionBranch`, `mixedElimCorrectionBranch` still use hardcoded single-char aliases instead of `buildAliasMap`.
+    `reserveBranch`, `elimCorrectionBranch` still use hardcoded single-char aliases instead of `buildAliasMap`.
 
-12. **`classifyBehavior` naming**
-    Returns `"fully_allocated"` for zero-dimension metrics (no propagation needed). Functionally correct but semantically misleading — `"native"` or `"direct"` would be clearer.
+12. ~~**`classifyBehavior` naming**~~ → **RESOLVED: function deleted.** No longer applicable.
 
 ### Missing Tests
 
@@ -53,9 +61,9 @@ Address issues surfaced during the PR #4 code review that weren't blocking merge
 
 14. **No planner test for `enrollment_grade`** (junction metric) in student_experience or department_financial.
 
-15. **No validation test for `reserve` at summarization boundary** — only `elimination` rejection tested.
+15. ~~**No validation test for `reserve` at summarization boundary**~~ → **RESOLVED: summarization check removed; reserve-in-path rejection test added.**
 
-16. **No validation test for `sum_over_sum` accepted at summarization boundary**.
+16. ~~**No validation test for `sum_over_sum` accepted at summarization boundary**~~ → **RESOLVED: summarization check removed; no boundary check exists.**
 
 17. **No estimator test for relationship metric with reserve/elimination placeholders**.
 

@@ -16,6 +16,11 @@ export interface GenerateOptions {
   dataDir?: string;
 }
 
+/** Quote a SQL identifier with DuckDB double-quote style. */
+function q(identifier: string): string {
+  return `"${identifier.replace(/"/g, '""')}"`;
+}
+
 /**
  * Generate all SQL for a manifest.
  */
@@ -44,14 +49,14 @@ function generateLoadData(manifest: Manifest, sm: SourceMapping, dataDir: string
   for (const entity of manifest.entities) {
     const es = sm.entities[entity.name];
     lines.push(
-      `CREATE OR REPLACE TABLE ${es.table} AS`,
+      `CREATE OR REPLACE TABLE ${q(es.table)} AS`,
       `SELECT * FROM read_csv_auto('${dataDir}/${es.table}.csv');\n`
     );
   }
   for (const rel of manifest.relationships) {
     const rs = sm.relationships[rel.name];
     lines.push(
-      `CREATE OR REPLACE TABLE ${rs.table} AS`,
+      `CREATE OR REPLACE TABLE ${q(rs.table)} AS`,
       `SELECT * FROM read_csv_auto('${dataDir}/${rs.table}.csv');\n`
     );
   }
@@ -228,14 +233,14 @@ function baseJoinSQL(
   for (const entityName of grainEntities) {
     const es = sm.entities[entityName];
     const alias = aliasMap.get(entityName)!;
-    selectCols.push(`${alias}.${es.idColumn}`);
-    selectCols.push(`${alias}.${es.labelColumn} AS ${entityName.toLowerCase()}_name`);
+    selectCols.push(`${alias}.${q(es.idColumn)}`);
+    selectCols.push(`${alias}.${q(es.labelColumn)} AS ${q(entityName.toLowerCase() + "_name")}`);
     // Entity metrics
     const entityMetrics = allMetrics.filter(
       (m) => m.home.kind === "entity" && m.home.grain[0] === entityName
     );
     for (const m of entityMetrics) {
-      selectCols.push(`${alias}.${m.name}`);
+      selectCols.push(`${alias}.${q(m.name)}`);
     }
   }
 
@@ -249,11 +254,11 @@ function baseJoinSQL(
 
     const fromAlias = aliasMap.get(link.fromEntity)!;
     joinLines.push(
-      `JOIN ${link.junctionTable} ${jAlias} ON ${fromAlias}.${sm.entities[link.fromEntity].idColumn} = ${jAlias}.${link.fromColumn}`
+      `JOIN ${q(link.junctionTable)} ${jAlias} ON ${fromAlias}.${q(sm.entities[link.fromEntity].idColumn)} = ${jAlias}.${q(link.fromColumn)}`
     );
     const toEs = sm.entities[link.toEntity];
     joinLines.push(
-      `JOIN ${toEs.table} ${toAlias} ON ${toAlias}.${toEs.idColumn} = ${jAlias}.${link.toColumn}`
+      `JOIN ${q(toEs.table)} ${toAlias} ON ${toAlias}.${q(toEs.idColumn)} = ${jAlias}.${q(link.toColumn)}`
     );
   }
 
@@ -262,7 +267,7 @@ function baseJoinSQL(
     if (m.home.kind === "relationship") {
       const jAlias = junctionAliasMap.get(m.home.name);
       if (jAlias) {
-        selectCols.push(`${jAlias}.${m.name}`);
+        selectCols.push(`${jAlias}.${q(m.name)}`);
       }
     }
   }
@@ -271,10 +276,10 @@ function baseJoinSQL(
     `${"-".repeat(71)}`,
     `-- Step 1: Base grain (${grainEntities.join(" x ")})`,
     `${"-".repeat(71)}`,
-    `CREATE OR REPLACE TABLE ${prefix}_base AS`,
+    `CREATE OR REPLACE TABLE ${q(prefix + "_base")} AS`,
     `SELECT`,
     selectCols.map((c) => `    ${c}`).join(",\n"),
-    `FROM ${fe.table} ${firstAlias}`,
+    `FROM ${q(fe.table)} ${firstAlias}`,
     joinLines.join("\n") + ";",
   ].join("\n");
 }
@@ -291,8 +296,8 @@ function weightedSQL(group: GrainGroup, sm: SourceMapping, prefix: string): stri
       `${"-".repeat(71)}`,
       `-- Step 2: No weights needed`,
       `${"-".repeat(71)}`,
-      `CREATE OR REPLACE TABLE ${prefix}_weighted AS`,
-      `SELECT * FROM ${prefix}_base;`,
+      `CREATE OR REPLACE TABLE ${q(prefix + "_weighted")} AS`,
+      `SELECT * FROM ${q(prefix + "_base")};`,
     ].join("\n");
   }
 
@@ -300,11 +305,11 @@ function weightedSQL(group: GrainGroup, sm: SourceMapping, prefix: string): stri
     `${"-".repeat(71)}`,
     `-- Step 2: Compute weights for allocation / sum_over_sum`,
     `${"-".repeat(71)}`,
-    `CREATE OR REPLACE TABLE ${prefix}_weighted AS`,
+    `CREATE OR REPLACE TABLE ${q(prefix + "_weighted")} AS`,
     `SELECT`,
     `    *,`,
-    weightExprs.map((w) => `    ${w.expr} AS ${w.name}`).join(",\n"),
-    `FROM ${prefix}_base;`,
+    weightExprs.map((w) => `    ${w.expr} AS ${q(w.name)}`).join(",\n"),
+    `FROM ${q(prefix + "_base")};`,
   ].join("\n");
 }
 
@@ -318,59 +323,38 @@ function collectWeights(group: GrainGroup, sm: SourceMapping): WeightExpr[] {
   const seen = new Set<string>();
 
   for (const metric of group.metrics) {
-    if (metric.behavior === "pure_reserve" || metric.behavior === "pure_elimination" || metric.behavior === "mixed") {
-      continue;
-    }
+    // Get all propagated dimensions (with hopIndex) sorted by hop order.
+    // This includes elimination hops — we need them for partition columns
+    // even though we only generate weights for allocation/sum_over_sum hops.
+    const allHops = metric.propagatedDimensions
+      .filter((d) => d.hopIndex !== undefined)
+      .sort((a, b) => (a.hopIndex ?? 0) - (b.hopIndex ?? 0));
 
-    // For allocation and sum_over_sum: need count weights per hop
-    const allocDims = metric.propagatedDimensions.filter(
+    const allocDims = allHops.filter(
       (d) => d.strategy === "allocation" || d.strategy === "sum_over_sum"
     );
 
     if (allocDims.length === 0) continue;
 
-    // Sort by hopIndex to get the right partition expressions
-    const sorted = [...allocDims].sort((a, b) => (a.hopIndex ?? 0) - (b.hopIndex ?? 0));
+    const homePartitionCols = metric.home.grain.map((e) => q(sm.entities[e].idColumn));
 
-    // For relationship metrics, partition by all home grain entity ids
-    const homePartitionCols = metric.home.grain.map((e) => sm.entities[e].idColumn);
+    for (const dim of allocDims) {
+      const weightName = `${dim.relationship.toLowerCase()}_count`;
+      if (seen.has(weightName)) continue;
+      seen.add(weightName);
 
-    for (let i = 0; i < sorted.length; i++) {
-      const dim = sorted[i];
-
-      if (i === 0 && sorted.length > 1) {
-        // First hop of multi-hop: COUNT(DISTINCT target_id) OVER (PARTITION BY home_ids)
-        const targetEs = sm.entities[dim.entity];
-        const weightName = `${dim.relationship.toLowerCase()}_count`;
-        if (seen.has(weightName)) continue;
-        seen.add(weightName);
-        weights.push({
-          name: weightName,
-          expr: `COUNT(DISTINCT ${targetEs.idColumn}) OVER (PARTITION BY ${homePartitionCols.join(", ")})`,
-        });
-      } else if (i > 0) {
-        // Subsequent hops: COUNT(*) OVER (PARTITION BY prev_entities)
-        const partitionCols = [...homePartitionCols];
-        for (let j = 0; j < i; j++) {
-          partitionCols.push(sm.entities[sorted[j].entity].idColumn);
-        }
-        const weightName = `${dim.relationship.toLowerCase()}_count`;
-        if (seen.has(weightName)) continue;
-        seen.add(weightName);
-        weights.push({
-          name: weightName,
-          expr: `COUNT(*) OVER (PARTITION BY ${partitionCols.join(", ")})`,
-        });
-      } else {
-        // Single-hop allocation or sum_over_sum
-        const weightName = `${dim.relationship.toLowerCase()}_count`;
-        if (seen.has(weightName)) continue;
-        seen.add(weightName);
-        weights.push({
-          name: weightName,
-          expr: `COUNT(*) OVER (PARTITION BY ${homePartitionCols.join(", ")})`,
-        });
+      // Partition by home + all entities from prior hops (any strategy)
+      const partitionCols = [...homePartitionCols];
+      for (const priorDim of allHops) {
+        if ((priorDim.hopIndex ?? 0) >= (dim.hopIndex ?? 0)) break;
+        partitionCols.push(q(sm.entities[priorDim.entity].idColumn));
       }
+
+      const targetEs = sm.entities[dim.entity];
+      weights.push({
+        name: weightName,
+        expr: `COUNT(DISTINCT ${q(targetEs.idColumn)}) OVER (PARTITION BY ${partitionCols.join(", ")})`,
+      });
     }
   }
 
@@ -399,24 +383,22 @@ function summarizationSQL(
 
   for (const entityName of bftEntitiesInGrain) {
     const es = sm.entities[entityName];
-    groupByCols.push(es.idColumn);
-    groupByCols.push(`${entityName.toLowerCase()}_name`);
-    selectCols.push(es.idColumn);
-    selectCols.push(`${entityName.toLowerCase()}_name`);
+    const nameCol = q(entityName.toLowerCase() + "_name");
+    groupByCols.push(q(es.idColumn));
+    groupByCols.push(nameCol);
+    selectCols.push(q(es.idColumn));
+    selectCols.push(nameCol);
   }
 
-  // Metric expressions: SUM for allocated/eliminated, SUM for value and SUM for weight for sum_over_sum
+  // Metric expressions: SUM with allocation weights where applicable
   for (const metric of metrics) {
-    if (metric.behavior === "fully_allocated") {
-      // Allocation expression from the weighted table, then sum
-      selectCols.push(`SUM(${allocationExpr(metric, sm)}) AS ${metric.name}`);
-    } else if (metric.behavior === "sum_over_sum") {
-      selectCols.push(`SUM(${metric.name}) AS ${metric.name}`);
-      selectCols.push(`SUM(${sumOverSumWeightExpr(metric)}) AS ${metric.name}_weight`);
-    } else if (metric.behavior === "pure_elimination") {
-      selectCols.push(`SUM(${metric.name} * 1.0) AS ${metric.name}`);
+    if (metric.nature === "non-additive") {
+      selectCols.push(`SUM(${q(metric.name)}) AS ${q(metric.name)}`);
+      selectCols.push(`SUM(${sumOverSumWeightExpr(metric)}) AS ${q(metric.name + "_weight")}`);
     } else {
-      selectCols.push(`SUM(${metric.name} * 1.0) AS ${metric.name}`);
+      // allocationExpr returns "metric * 1.0" for non-allocated metrics,
+      // "metric * 1.0 / weight" for allocated ones — handles all additive cases.
+      selectCols.push(`SUM(${allocationExpr(metric, sm)}) AS ${q(metric.name)}`);
     }
   }
 
@@ -424,10 +406,10 @@ function summarizationSQL(
     `${"-".repeat(71)}`,
     `-- Step 2.5: Summarize to BFT grain (${bftEntitiesInGrain.join(" x ")})`,
     `${"-".repeat(71)}`,
-    `CREATE OR REPLACE TABLE ${prefix}_summarized AS`,
+    `CREATE OR REPLACE TABLE ${q(prefix + "_summarized")} AS`,
     `SELECT`,
     selectCols.map((c) => `    ${c}`).join(",\n"),
-    `FROM ${prefix}_weighted`,
+    `FROM ${q(prefix + "_weighted")}`,
     `GROUP BY ${groupByCols.join(", ")};`,
   ].join("\n");
 }
@@ -456,18 +438,25 @@ function assemblySQL(
   // summarized tables already have the correct aggregation)
   if (!hasSummarization) {
     for (const metric of allMetrics) {
-      if (metric.behavior === "fully_allocated" || metric.behavior === "sum_over_sum") {
-        continue; // no placeholder rows needed
+      if (metric.nature === "non-additive") continue;
+
+      const hasElimDims = metric.propagatedDimensions.some((d) => d.strategy === "elimination");
+      const hasAllocDims = metric.propagatedDimensions.some((d) => d.strategy === "allocation");
+      const hasReserveDims = metric.reserveDimensions.length > 0;
+      const hasPropagation = hasElimDims || hasAllocDims;
+
+      if (!hasPropagation && !hasReserveDims) continue;
+
+      if (hasReserveDims) {
+        if (hasPropagation) {
+          branches.push(propagationDataBranch(plan, metric, allMetrics, sm, prefix, placeholderLabel));
+        } else {
+          branches.push(reserveBranch(plan, metric, allMetrics, sm, placeholderLabel));
+        }
       }
 
-      if (metric.behavior === "pure_reserve") {
-        branches.push(reserveBranch(plan, metric, allMetrics, sm, placeholderLabel));
-      } else if (metric.behavior === "pure_elimination") {
-        branches.push(eliminationCorrectionBranch(plan, metric, allMetrics, sm, prefix, placeholderLabel));
-      } else if (metric.behavior === "mixed") {
-        // Elimination + reserve interaction
-        branches.push(mixedElimDataBranch(plan, metric, allMetrics, sm, placeholderLabel));
-        branches.push(mixedElimCorrectionBranch(plan, metric, allMetrics, sm, placeholderLabel));
+      if (hasElimDims) {
+        branches.push(elimCorrectionBranch(plan, metric, allMetrics, sm, prefix, placeholderLabel));
       }
     }
   }
@@ -478,7 +467,7 @@ function assemblySQL(
     `${"-".repeat(71)}`,
     `-- Step 3: Assemble final table`,
     `${"-".repeat(71)}`,
-    `CREATE OR REPLACE TABLE ${plan.tableName} AS`,
+    `CREATE OR REPLACE TABLE ${q(plan.tableName)} AS`,
     "",
     unionAll + ";",
   ].join("\n");
@@ -509,14 +498,25 @@ function multiGroupAssemblySQL(
 
     // Placeholder branches for BFT-grain metrics
     for (const metric of bftMetrics) {
-      if (metric.behavior === "fully_allocated" || metric.behavior === "sum_over_sum") continue;
-      if (metric.behavior === "pure_reserve") {
-        branches.push(reserveBranch(plan, metric, allMetrics, sm, placeholderLabel));
-      } else if (metric.behavior === "pure_elimination") {
-        branches.push(eliminationCorrectionBranch(plan, metric, allMetrics, sm, prefix, placeholderLabel));
-      } else if (metric.behavior === "mixed") {
-        branches.push(mixedElimDataBranch(plan, metric, allMetrics, sm, placeholderLabel));
-        branches.push(mixedElimCorrectionBranch(plan, metric, allMetrics, sm, placeholderLabel));
+      if (metric.nature === "non-additive") continue;
+
+      const hasElimDims = metric.propagatedDimensions.some((d) => d.strategy === "elimination");
+      const hasAllocDims = metric.propagatedDimensions.some((d) => d.strategy === "allocation");
+      const hasReserveDims = metric.reserveDimensions.length > 0;
+      const hasPropagation = hasElimDims || hasAllocDims;
+
+      if (!hasPropagation && !hasReserveDims) continue;
+
+      if (hasReserveDims) {
+        if (hasPropagation) {
+          branches.push(propagationDataBranch(plan, metric, allMetrics, sm, prefix, placeholderLabel));
+        } else {
+          branches.push(reserveBranch(plan, metric, allMetrics, sm, placeholderLabel));
+        }
+      }
+
+      if (hasElimDims) {
+        branches.push(elimCorrectionBranch(plan, metric, allMetrics, sm, prefix, placeholderLabel));
       }
     }
   }
@@ -533,7 +533,7 @@ function multiGroupAssemblySQL(
     `${"-".repeat(71)}`,
     `-- Step 3: Assemble final table`,
     `${"-".repeat(71)}`,
-    `CREATE OR REPLACE TABLE ${plan.tableName} AS`,
+    `CREATE OR REPLACE TABLE ${q(plan.tableName)} AS`,
     "",
     unionAll + ";",
   ].join("\n");
@@ -561,12 +561,13 @@ function groupBaseBranch(
   const cols: string[] = [];
   for (const entityName of plan.bftGrain) {
     const es = sm.entities[entityName];
+    const nameCol = q(entityName.toLowerCase() + "_name");
     if (groupGrainSet.has(entityName)) {
-      cols.push(es.idColumn);
-      cols.push(`${entityName.toLowerCase()}_name`);
+      cols.push(q(es.idColumn));
+      cols.push(nameCol);
     } else {
-      cols.push(`NULL AS ${es.idColumn}`);
-      cols.push(`'${label}' AS ${entityName.toLowerCase()}_name`);
+      cols.push(`NULL AS ${q(es.idColumn)}`);
+      cols.push(`'${label}' AS ${nameCol}`);
     }
   }
 
@@ -574,32 +575,29 @@ function groupBaseBranch(
     if (groupMetricNames.has(metric.name)) {
       // This metric belongs to this group
       if (group.needsSummarization) {
-        cols.push(`${metric.name}`);
-        if (metric.behavior === "sum_over_sum") {
-          cols.push(`${metric.name}_weight`);
+        cols.push(q(metric.name));
+        if (metric.nature === "non-additive") {
+          cols.push(q(metric.name + "_weight"));
         }
-      } else if (metric.behavior === "fully_allocated") {
-        cols.push(allocationExpr(metric, sm) + ` AS ${metric.name}`);
-      } else if (metric.behavior === "sum_over_sum") {
-        cols.push(`${metric.name}`);
-        cols.push(sumOverSumWeightExpr(metric) + ` AS ${metric.name}_weight`);
-      } else if (metric.behavior === "pure_elimination") {
-        cols.push(`${metric.name} * 1.0 AS ${metric.name}`);
+      } else if (metric.nature === "non-additive") {
+        cols.push(q(metric.name));
+        cols.push(sumOverSumWeightExpr(metric) + ` AS ${q(metric.name + "_weight")}`);
+      } else if (metric.reserveDimensions.length > 0) {
+        cols.push(`0.0 AS ${q(metric.name)}`);
       } else {
-        // pure_reserve, mixed: 0 on base rows
-        cols.push(`0.0 AS ${metric.name}`);
+        cols.push(allocationExpr(metric, sm) + ` AS ${q(metric.name)}`);
       }
     } else {
       // Metric from another group: 0
-      cols.push(`0.0 AS ${metric.name}`);
-      if (metric.behavior === "sum_over_sum") {
-        cols.push(`0 AS ${metric.name}_weight`);
+      cols.push(`0.0 AS ${q(metric.name)}`);
+      if (metric.nature === "non-additive") {
+        cols.push(`0 AS ${q(metric.name + "_weight")}`);
       }
     }
   }
 
   lines.push(cols.map((c) => `    ${c}`).join(",\n"));
-  lines.push(`FROM ${sourceTable}`);
+  lines.push(`FROM ${q(sourceTable)}`);
   return lines.join("\n");
 }
 
@@ -619,35 +617,33 @@ function baseGrainBranch(
   const cols: string[] = [];
   for (const entityName of plan.bftGrain) {
     const es = sm.entities[entityName];
-    cols.push(es.idColumn);
-    cols.push(`${entityName.toLowerCase()}_name`);
+    cols.push(q(es.idColumn));
+    cols.push(q(entityName.toLowerCase() + "_name"));
   }
 
   for (const metric of allMetrics) {
     if (hasSummarization) {
       // Summarized table already has the right values
-      cols.push(`${metric.name}`);
-      if (metric.behavior === "sum_over_sum") {
-        cols.push(`${metric.name}_weight`);
+      cols.push(q(metric.name));
+      if (metric.nature === "non-additive") {
+        cols.push(q(metric.name + "_weight"));
       }
-    } else if (metric.behavior === "fully_allocated") {
-      cols.push(allocationExpr(metric, sm) + ` AS ${metric.name}`);
-    } else if (metric.behavior === "sum_over_sum") {
-      cols.push(`${metric.name}`);
-      cols.push(sumOverSumWeightExpr(metric) + ` AS ${metric.name}_weight`);
+    } else if (metric.nature === "non-additive") {
+      cols.push(q(metric.name));
+      cols.push(sumOverSumWeightExpr(metric) + ` AS ${q(metric.name + "_weight")}`);
+    } else if (metric.reserveDimensions.length > 0) {
+      // Reserve dims present: 0 on base rows, separate branches handle value
+      cols.push(`0.0 AS ${q(metric.name)}`);
     } else {
-      // pure_elimination where no dims are reserve: full value on base rows
-      // pure_reserve or mixed: 0 on base rows
-      if (metric.behavior === "pure_elimination") {
-        cols.push(`${metric.name} * 1.0 AS ${metric.name}`);
-      } else {
-        cols.push(`0.0 AS ${metric.name}`);
-      }
+      // No reserve dims: metric goes on base rows with allocation weights.
+      // allocationExpr returns "metric * 1.0" when no allocation dims,
+      // "metric * 1.0 / weight" when allocated — handles all cases.
+      cols.push(allocationExpr(metric, sm) + ` AS ${q(metric.name)}`);
     }
   }
 
   lines.push(cols.map((c) => `    ${c}`).join(",\n"));
-  lines.push(`FROM ${sourceTable}`);
+  lines.push(`FROM ${q(sourceTable)}`);
   return lines.join("\n");
 }
 
@@ -656,9 +652,9 @@ function allocationExpr(metric: MetricPlan, sm: SourceMapping): string {
     .filter((d) => d.strategy === "allocation")
     .sort((a, b) => (a.hopIndex ?? 0) - (b.hopIndex ?? 0));
 
-  let expr = `${metric.name} * 1.0`;
+  let expr = `${q(metric.name)} * 1.0`;
   for (const dim of allocDims) {
-    expr += ` / ${dim.relationship.toLowerCase()}_count`;
+    expr += ` / ${q(dim.relationship.toLowerCase() + "_count")}`;
   }
   return expr;
 }
@@ -666,7 +662,7 @@ function allocationExpr(metric: MetricPlan, sm: SourceMapping): string {
 function sumOverSumWeightExpr(metric: MetricPlan): string {
   const dim = metric.propagatedDimensions.find((d) => d.strategy === "sum_over_sum");
   if (!dim) return "1.0";
-  return `1.0 / ${dim.relationship.toLowerCase()}_count`;
+  return `1.0 / ${q(dim.relationship.toLowerCase() + "_count")}`;
 }
 
 /**
@@ -687,36 +683,85 @@ function reserveBranch(
   const cols: string[] = [];
   for (const entityName of plan.bftGrain) {
     const es = sm.entities[entityName];
+    const nameCol = q(entityName.toLowerCase() + "_name");
     if (entityName === home) {
-      cols.push(es.idColumn);
-      cols.push(`${es.labelColumn} AS ${entityName.toLowerCase()}_name`);
+      cols.push(q(es.idColumn));
+      cols.push(`${q(es.labelColumn)} AS ${nameCol}`);
     } else {
-      cols.push(`NULL AS ${es.idColumn}`);
-      cols.push(`'${label}' AS ${entityName.toLowerCase()}_name`);
+      cols.push(`NULL AS ${q(es.idColumn)}`);
+      cols.push(`'${label}' AS ${nameCol}`);
     }
   }
 
   for (const m of allMetrics) {
     if (m.name === metric.name) {
-      cols.push(`${m.name} * 1.0 AS ${m.name}`);
+      cols.push(`${q(m.name)} * 1.0 AS ${q(m.name)}`);
     } else {
-      cols.push(`0.0 AS ${m.name}`);
-      if (m.behavior === "sum_over_sum") {
-        cols.push(`0 AS ${m.name}_weight`);
+      cols.push(`0.0 AS ${q(m.name)}`);
+      if (m.nature === "non-additive") {
+        cols.push(`0 AS ${q(m.name + "_weight")}`);
       }
     }
   }
 
   lines.push(cols.map((c) => `    ${c}`).join(",\n"));
-  lines.push(`FROM ${homeEs.table}`);
+  lines.push(`FROM ${q(homeEs.table)}`);
   return lines.join("\n");
 }
 
 /**
- * Pure elimination correction branch: one row per home entity value.
- * foreign entity = placeholder, metric = value * (1 - N).
+ * Propagation data branch: for metrics with reserve dimensions that also
+ * have propagation (elimination or allocation). SELECT DISTINCT from the
+ * weighted table, with real values for compute-grain entities and
+ * placeholders for reserve entities.
  */
-function eliminationCorrectionBranch(
+function propagationDataBranch(
+  plan: TablePlan,
+  metric: MetricPlan,
+  allMetrics: MetricPlan[],
+  sm: SourceMapping,
+  prefix: string,
+  label: string
+): string {
+  const computeGrainSet = new Set(metric.computeGrain);
+  const lines: string[] = [`-- ${metric.name} propagation data rows`];
+  lines.push("SELECT DISTINCT");
+
+  const cols: string[] = [];
+  for (const entityName of plan.bftGrain) {
+    const es = sm.entities[entityName];
+    const nameCol = q(entityName.toLowerCase() + "_name");
+    if (computeGrainSet.has(entityName)) {
+      cols.push(q(es.idColumn));
+      cols.push(nameCol);
+    } else {
+      cols.push(`NULL AS ${q(es.idColumn)}`);
+      cols.push(`'${label}' AS ${nameCol}`);
+    }
+  }
+
+  for (const m of allMetrics) {
+    if (m.name === metric.name) {
+      cols.push(allocationExpr(metric, sm) + ` AS ${q(m.name)}`);
+    } else {
+      cols.push(`0.0 AS ${q(m.name)}`);
+      if (m.nature === "non-additive") {
+        cols.push(`0 AS ${q(m.name + "_weight")}`);
+      }
+    }
+  }
+
+  lines.push(cols.map((c) => `    ${c}`).join(",\n"));
+  lines.push(`FROM ${q(prefix + "_weighted")}`);
+  return lines.join("\n");
+}
+
+/**
+ * Elimination correction branch: one row per home entity value.
+ * Uses COUNT(DISTINCT target_id) from the base table to compute the
+ * correction offset, so it works correctly regardless of reserve dims.
+ */
+function elimCorrectionBranch(
   plan: TablePlan,
   metric: MetricPlan,
   allMetrics: MetricPlan[],
@@ -726,146 +771,8 @@ function eliminationCorrectionBranch(
 ): string {
   const home = homeEntity(metric);
   const homeEs = sm.entities[home];
-  const lines: string[] = [`-- Elimination correction rows for ${metric.name}`];
-  lines.push("SELECT");
-
-  const cols: string[] = [];
-  for (const entityName of plan.bftGrain) {
-    const es = sm.entities[entityName];
-    if (entityName === home) {
-      cols.push(es.idColumn);
-      cols.push(`${entityName.toLowerCase()}_name`);
-    } else {
-      cols.push(`NULL AS ${es.idColumn}`);
-      cols.push(`'${label}' AS ${entityName.toLowerCase()}_name`);
-    }
-  }
-
-  for (const m of allMetrics) {
-    if (m.name === metric.name) {
-      cols.push(`${m.name} * (1 - COUNT(*)) AS ${m.name}`);
-    } else {
-      cols.push(`0 AS ${m.name}`);
-      if (m.behavior === "sum_over_sum") {
-        cols.push(`0 AS ${m.name}_weight`);
-      }
-    }
-  }
-
-  lines.push(cols.map((c) => `    ${c}`).join(",\n"));
-
-  const groupCols = [homeEs.idColumn, `${home.toLowerCase()}_name`, metric.name];
-  lines.push(`FROM ${prefix}_base`);
-  lines.push(`GROUP BY ${groupCols.join(", ")}`);
-
-  return lines.join("\n");
-}
-
-/**
- * Mixed: elimination data rows. The metric appears on rows where
- * reserve-dimension entities are placeholder, but elimination-dimension
- * entities are real. Source is the enrollment join (not the full base grain).
- */
-function mixedElimDataBranch(
-  plan: TablePlan,
-  metric: MetricPlan,
-  allMetrics: MetricPlan[],
-  sm: SourceMapping,
-  label: string
-): string {
-  const home = homeEntity(metric);
-  const homeEs = sm.entities[home];
   const elimDims = metric.propagatedDimensions.filter((d) => d.strategy === "elimination");
-
-  // Outer SELECT: real columns for home + elimination entities, placeholder for reserve
-  const outerCols: string[] = [];
-  for (const entityName of plan.bftGrain) {
-    const es = sm.entities[entityName];
-    if (entityName === home || elimDims.some((d) => d.entity === entityName)) {
-      outerCols.push(es.idColumn);
-      outerCols.push(`${entityName.toLowerCase()}_name`);
-    } else {
-      outerCols.push(`NULL AS ${es.idColumn}`);
-      outerCols.push(`'${label}' AS ${entityName.toLowerCase()}_name`);
-    }
-  }
-  for (const m of allMetrics) {
-    if (m.name === metric.name) {
-      outerCols.push(`${m.name} * 1.0 AS ${m.name}`);
-    } else {
-      outerCols.push(`0.0 AS ${m.name}`);
-      if (m.behavior === "sum_over_sum") {
-        outerCols.push(`0 AS ${m.name}_weight`);
-      }
-    }
-  }
-
-  // Subquery: join home entity to elimination-target entities via junction tables
-  // Build collision-free aliases for all tables in the subquery
-  const subTableNames = [
-    homeEs.table,
-    ...elimDims.map((d) => sm.entities[d.entity].table),
-    ...elimDims.map((d) => sm.relationships[d.relationship].table),
-  ];
-  const subAliasMap = buildAliasMap(subTableNames);
-
-  const subCols: string[] = [];
-  const homeAlias = subAliasMap.get(homeEs.table)!;
-  // Elimination target entities
-  for (const elimDim of elimDims) {
-    const targetEs = sm.entities[elimDim.entity];
-    const targetAlias = subAliasMap.get(targetEs.table)!;
-    subCols.push(`${targetAlias}.${targetEs.idColumn}`);
-    subCols.push(`${targetAlias}.${targetEs.labelColumn} AS ${elimDim.entity.toLowerCase()}_name`);
-  }
-  // Home entity
-  subCols.push(`${homeAlias}.${homeEs.idColumn}`);
-  subCols.push(`${homeAlias}.${homeEs.labelColumn} AS ${home.toLowerCase()}_name`);
-  subCols.push(`${homeAlias}.${metric.name}`);
-
-  const subJoins: string[] = [];
-  for (const elimDim of elimDims) {
-    const relSource = sm.relationships[elimDim.relationship];
-    const targetEs = sm.entities[elimDim.entity];
-    const targetAlias = subAliasMap.get(targetEs.table)!;
-    const jAlias = subAliasMap.get(relSource.table)!;
-    subJoins.push(`    JOIN ${relSource.table} ${jAlias} ON ${targetAlias}.${targetEs.idColumn} = ${jAlias}.${relSource.columns[elimDim.entity]}`);
-    subJoins.push(`    JOIN ${homeEs.table} ${homeAlias} ON ${homeAlias}.${homeEs.idColumn} = ${jAlias}.${relSource.columns[home]}`);
-  }
-
-  // First elimination target is the FROM table
-  const firstTarget = sm.entities[elimDims[0].entity];
-  const firstAlias = subAliasMap.get(firstTarget.table)!;
-
-  const lines = [
-    `-- ${metric.name} elimination data rows`,
-    `SELECT`,
-    outerCols.map((c) => `    ${c}`).join(",\n"),
-    `FROM (`,
-    `    SELECT DISTINCT`,
-    subCols.map((c) => `        ${c}`).join(",\n"),
-    `    FROM ${firstTarget.table} ${firstAlias}`,
-    ...subJoins,
-    `)`,
-  ];
-
-  return lines.join("\n");
-}
-
-/**
- * Mixed: elimination correction rows. Both elimination and reserve
- * dimensions get placeholder labels.
- */
-function mixedElimCorrectionBranch(
-  plan: TablePlan,
-  metric: MetricPlan,
-  allMetrics: MetricPlan[],
-  sm: SourceMapping,
-  label: string
-): string {
-  const home = homeEntity(metric);
-  const homeEs = sm.entities[home];
-  const elimDims = metric.propagatedDimensions.filter((d) => d.strategy === "elimination");
+  const firstElimTarget = sm.entities[elimDims[0].entity];
 
   const lines: string[] = [`-- ${metric.name} elimination correction rows`];
   lines.push("SELECT");
@@ -873,39 +780,32 @@ function mixedElimCorrectionBranch(
   const cols: string[] = [];
   for (const entityName of plan.bftGrain) {
     const es = sm.entities[entityName];
+    const nameCol = q(entityName.toLowerCase() + "_name");
     if (entityName === home) {
-      cols.push(`c.${es.idColumn}`);
-      cols.push(`c.${es.labelColumn} AS ${entityName.toLowerCase()}_name`);
+      cols.push(q(es.idColumn));
+      cols.push(nameCol);
     } else {
-      cols.push(`NULL AS ${es.idColumn}`);
-      cols.push(`'${label}' AS ${entityName.toLowerCase()}_name`);
+      cols.push(`NULL AS ${q(es.idColumn)}`);
+      cols.push(`'${label}' AS ${nameCol}`);
     }
   }
 
   for (const m of allMetrics) {
     if (m.name === metric.name) {
-      cols.push(`c.${m.name} * (1 - ec.${elimDims[0].relationship.toLowerCase()}_count) AS ${m.name}`);
+      cols.push(`${q(m.name)} * (1 - COUNT(DISTINCT ${q(firstElimTarget.idColumn)})) AS ${q(m.name)}`);
     } else {
-      cols.push(`0.0 AS ${m.name}`);
-      if (m.behavior === "sum_over_sum") {
-        cols.push(`0 AS ${m.name}_weight`);
+      cols.push(`0 AS ${q(m.name)}`);
+      if (m.nature === "non-additive") {
+        cols.push(`0 AS ${q(m.name + "_weight")}`);
       }
     }
   }
 
   lines.push(cols.map((c) => `    ${c}`).join(",\n"));
 
-  // Join home entity table with enrollment counts
-  const elimRel = sm.relationships[elimDims[0].relationship];
-  const elimEntityCol = elimRel.columns[elimDims[0].entity];
-  const homeCol = elimRel.columns[home];
-
-  lines.push(`FROM ${homeEs.table} c`);
-  lines.push(`JOIN (`);
-  lines.push(`    SELECT ${homeCol}, COUNT(*) AS ${elimDims[0].relationship.toLowerCase()}_count`);
-  lines.push(`    FROM ${elimRel.table}`);
-  lines.push(`    GROUP BY ${homeCol}`);
-  lines.push(`) ec ON c.${homeEs.idColumn} = ec.${homeCol}`);
+  const groupCols = [q(homeEs.idColumn), q(home.toLowerCase() + "_name"), q(metric.name)];
+  lines.push(`FROM ${q(prefix + "_base")}`);
+  lines.push(`GROUP BY ${groupCols.join(", ")}`);
 
   return lines.join("\n");
 }
@@ -937,9 +837,9 @@ function validationSQL(plan: TablePlan, allMetrics: MetricPlan[], sm: SourceMapp
     checks.push(`-- V${n}: SUM(${metric.name}) matches source`);
     checks.push(
       `SELECT 'V${n} ${metric.name}_sum' AS test,`,
-      `       CASE WHEN ABS(SUM(${metric.name}) - (SELECT SUM(${metric.name}) FROM ${sourceTable})) < 0.01`,
-      `            THEN 'PASS' ELSE 'FAIL: ' || SUM(${metric.name}) END AS result`,
-      `FROM ${plan.tableName};`
+      `       CASE WHEN ABS(SUM(${q(metric.name)}) - (SELECT SUM(${q(metric.name)}) FROM ${q(sourceTable)})) < 0.01`,
+      `            THEN 'PASS' ELSE 'FAIL: ' || SUM(${q(metric.name)}) END AS result`,
+      `FROM ${q(plan.tableName)};`
     );
     n++;
   }
@@ -947,7 +847,8 @@ function validationSQL(plan: TablePlan, allMetrics: MetricPlan[], sm: SourceMapp
   // V: Per-entity SUM check for allocated metrics (only when no summarization)
   if (!hasSummarization) {
     for (const metric of allMetrics) {
-      if (metric.behavior !== "fully_allocated") continue;
+      const hasAllocDims = metric.propagatedDimensions.some((d) => d.strategy === "allocation");
+      if (!hasAllocDims || metric.reserveDimensions.length > 0) continue;
 
       const home = homeEntity(metric);
       const homeEs = sm.entities[home];
@@ -968,11 +869,11 @@ function validationSQL(plan: TablePlan, allMetrics: MetricPlan[], sm: SourceMapp
         `       CASE WHEN COUNT(*) = 0 THEN 'PASS'`,
         `            ELSE 'FAIL: ' || COUNT(*) || ' with wrong sum' END AS result`,
         `FROM (`,
-        `    SELECT t.${homeEs.idColumn}, ABS(SUM(t.${metric.name}) - s.${metric.name}) AS err`,
-        `    FROM ${plan.tableName} t`,
-        `    JOIN ${homeEs.table} s ON t.${homeEs.idColumn} = s.${homeEs.idColumn}`,
-        `    GROUP BY t.${homeEs.idColumn}, s.${metric.name}`,
-        `    HAVING ABS(SUM(t.${metric.name}) - s.${metric.name}) > 0.01`,
+        `    SELECT t.${q(homeEs.idColumn)}, ABS(SUM(t.${q(metric.name)}) - s.${q(metric.name)}) AS err`,
+        `    FROM ${q(plan.tableName)} t`,
+        `    JOIN ${q(homeEs.table)} s ON t.${q(homeEs.idColumn)} = s.${q(homeEs.idColumn)}`,
+        `    GROUP BY t.${q(homeEs.idColumn)}, s.${q(metric.name)}`,
+        `    HAVING ABS(SUM(t.${q(metric.name)}) - s.${q(metric.name)}) > 0.01`,
         `);`
       );
       n++;
@@ -981,7 +882,7 @@ function validationSQL(plan: TablePlan, allMetrics: MetricPlan[], sm: SourceMapp
 
   // V: Sum/Sum weight check
   for (const metric of allMetrics) {
-    if (metric.behavior !== "sum_over_sum") continue;
+    if (metric.nature !== "non-additive") continue;
 
     const home = homeEntity(metric);
     const homeEs = sm.entities[home];
@@ -992,11 +893,11 @@ function validationSQL(plan: TablePlan, allMetrics: MetricPlan[], sm: SourceMapp
       `       CASE WHEN COUNT(*) = 0 THEN 'PASS'`,
       `            ELSE 'FAIL: ' || COUNT(*) || ' with bad weights' END AS result`,
       `FROM (`,
-      `    SELECT ${homeEs.idColumn}, ABS(SUM(${metric.name}_weight) - 1.0) AS err`,
-      `    FROM ${plan.tableName}`,
-      `    WHERE ${homeEs.idColumn} IS NOT NULL`,
-      `    GROUP BY ${homeEs.idColumn}`,
-      `    HAVING ABS(SUM(${metric.name}_weight) - 1.0) > 0.001`,
+      `    SELECT ${q(homeEs.idColumn)}, ABS(SUM(${q(metric.name + "_weight")}) - 1.0) AS err`,
+      `    FROM ${q(plan.tableName)}`,
+      `    WHERE ${q(homeEs.idColumn)} IS NOT NULL`,
+      `    GROUP BY ${q(homeEs.idColumn)}`,
+      `    HAVING ABS(SUM(${q(metric.name + "_weight")}) - 1.0) > 0.001`,
       `);`
     );
     n++;

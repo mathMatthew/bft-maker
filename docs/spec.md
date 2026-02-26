@@ -63,9 +63,9 @@ Example: tuition (a Student metric) in a Student × Class table. Each student ge
 
 Reserve is the **default strategy**. It makes no assumptions about how a metric relates to foreign entities. It is the safe, assumption-free starting point.
 
-### Elimination
+### Elimination (a.k.a. "double-counting")
 
-Every combination row sees the full metric value — the number is there as context, not attribution. Since this repeats the value, SUM overcounts. Correction rows carry a negative offset that keeps the total correct.
+Every combination row sees the full metric value — the number is there as context, not attribution. Since this repeats the value, a naïve SUM double-counts. Correction rows carry a negative offset that keeps the total correct.
 
 Example: class_budget (a Class metric) with elimination toward Student. Every Student × Class combination row shows the full class budget. Each class also gets a correction row (Student = `<Unallocated>`) carrying a negative offset so that `SUM(class_budget)` returns the true total.
 
@@ -404,7 +404,7 @@ FROM cs_weighted
 GROUP BY class_id, class_name, professor_id, professor_name;
 ```
 
-Only allocation and sum_over_sum strategies survive summarization — SUM preserves their correctness. Elimination and reserve cannot be summarized. The validator catches this: if a metric requires summarization and its boundary strategy is elimination or reserve, validation fails with a clear error.
+All propagation strategies survive summarization — the "compute at full grain, then GROUP BY + SUM" model preserves correctness. Allocation and sum_over_sum produce proportionally distributed values that sum naturally. Elimination's correction rows also sum correctly through GROUP BY, keeping totals accurate. Reserve is not a valid propagation edge strategy (it's the implicit default when an entity is omitted from the path), so it never appears in a compute grain that needs summarization.
 
 ### Grain Groups
 

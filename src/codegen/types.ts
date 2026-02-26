@@ -54,16 +54,7 @@ export interface MetricPlan {
   /** Entities in computeGrain not in BFT grain — aggregated out after computation. */
   summarizeOut: string[];
 
-  /** Shorthand classification for SQL generation */
-  behavior: MetricBehavior;
 }
-
-export type MetricBehavior =
-  | "fully_allocated"    // all propagated dims allocation, no reserve dims, no summarization
-  | "sum_over_sum"       // non-additive
-  | "pure_elimination"   // all propagated dims elimination, no reserve dims
-  | "pure_reserve"       // no propagated dims (all foreign entities are reserve)
-  | "mixed";             // any other combination
 
 /**
  * Metrics sharing the same computeGrain are grouped for shared SQL generation.

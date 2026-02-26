@@ -1,10 +1,9 @@
-import type { Manifest, BftTable, Relationship } from "../manifest/types.js";
+import type { Manifest, BftTable, Relationship, Strategy } from "../manifest/types.js";
 import { buildMetricHomeMap, findMetricDef } from "../manifest/helpers.js";
 import type { MetricHome } from "../manifest/helpers.js";
 import type {
   TablePlan,
   MetricPlan,
-  MetricBehavior,
   DimensionStrategy,
   JoinLink,
   SourceMapping,
@@ -86,7 +85,7 @@ function planMetric(
   metricName: string,
   home: MetricHome,
   nature: "additive" | "non-additive",
-  propagation: { path: { relationship: string; target_entity: string; strategy: import("../manifest/types.js").Strategy; weight?: string }[] } | undefined,
+  propagation: { path: { relationship: string; target_entity: string; strategy: Strategy; weight?: string }[] } | undefined,
   bftGrainSet: Set<string>,
   bftGrain: string[]
 ): MetricPlan {
@@ -128,9 +127,8 @@ function planMetric(
   const reserveDimensions = bftGrain.filter((e) => !computeGrainSet.has(e));
   const summarizeOut = computeGrain.filter((e) => !bftGrainSet.has(e));
 
-  // For backward compatibility with existing tests: add reserve dimensions
-  // to propagatedDimensions when there's no summarization or explicit propagation
-  // (This preserves the "all foreign entities get a strategy" behavior)
+  // Include reserve dimensions in propagatedDimensions so the full dimension
+  // list is available for SQL generation decisions.
   const allDimensions = [
     ...propagatedDimensions,
     ...reserveDimensions.map((entity) => ({
@@ -140,8 +138,6 @@ function planMetric(
     })),
   ];
 
-  const behavior = classifyBehavior(allDimensions, nature, reserveDimensions.length);
-
   return {
     name: metricName,
     home,
@@ -150,27 +146,7 @@ function planMetric(
     computeGrain,
     reserveDimensions,
     summarizeOut,
-    behavior,
   };
-}
-
-function classifyBehavior(
-  dimensions: DimensionStrategy[],
-  nature: "additive" | "non-additive",
-  reserveCount: number
-): MetricBehavior {
-  if (nature === "non-additive") return "sum_over_sum";
-  if (dimensions.length === 0) return "fully_allocated";
-
-  const strategies = new Set(dimensions.map((d) => d.strategy));
-  if (strategies.size === 1) {
-    const only = [...strategies][0];
-    if (only === "allocation" && reserveCount === 0) return "fully_allocated";
-    if (only === "elimination" && reserveCount === 0) return "pure_elimination";
-    if (only === "reserve") return "pure_reserve";
-  }
-  if (strategies.has("elimination") && strategies.has("reserve")) return "mixed";
-  return "mixed";
 }
 
 /**
