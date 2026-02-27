@@ -69,6 +69,48 @@ describe("planner", () => {
     assert.ok(budget.propagatedDimensions.some((d) => d.strategy === "elimination"));
     assert.equal(budget.reserveDimensions.length, 0);
   });
+
+  it("plans class_summary with summarization and correct grain", () => {
+    const table = manifest.bft_tables.find((t) => t.name === "class_summary")!;
+    const plan = planTable(manifest, table, sm);
+
+    assert.deepEqual(plan.bftGrain, ["Class", "Professor"]);
+    assert.ok(plan.grainGroups.length > 0);
+    assert.ok(
+      plan.grainGroups.some((g) => g.needsSummarization),
+      "Expected at least one grain group with needsSummarization=true"
+    );
+
+    const allMetrics = plan.grainGroups.flatMap((g) => g.metrics);
+
+    // tuition_paid: home is Student, which is not in BFT grain → needs summarization
+    const tuition = allMetrics.find((m) => m.name === "tuition_paid")!;
+    assert.ok(tuition.summarizeOut.length > 0, "tuition_paid should summarize out Student");
+    assert.ok(tuition.summarizeOut.includes("Student"));
+
+    // enrollment_grade: home is junction [Student, Class], Student summarized out
+    const grade = allMetrics.find((m) => m.name === "enrollment_grade")!;
+    assert.ok(grade.summarizeOut.includes("Student"));
+  });
+
+  it("plans enrollment_grade junction metric at natural grain in student_experience", () => {
+    const table = manifest.bft_tables.find((t) => t.name === "student_experience")!;
+    const plan = planTable(manifest, table, sm);
+
+    const allMetrics = plan.grainGroups.flatMap((g) => g.metrics);
+    const grade = allMetrics.find((m) => m.name === "enrollment_grade")!;
+
+    // enrollment_grade lives on the Enrollment junction (Student × Class)
+    assert.deepEqual(grade.home.grain, ["Student", "Class"]);
+    assert.equal(grade.home.kind, "relationship");
+    assert.equal(grade.home.name, "Enrollment");
+
+    // In student_experience (Student × Class), enrollment_grade is at its natural grain.
+    // No propagation needed beyond the BFT grain — no allocation/elimination dims.
+    const nonReserveDims = grade.propagatedDimensions.filter((d) => d.strategy !== "reserve");
+    assert.equal(nonReserveDims.length, 0, "enrollment_grade should have no propagated (non-reserve) dims in student_experience");
+    assert.equal(grade.reserveDimensions.length, 0, "enrollment_grade should have no reserve dims in student_experience");
+  });
 });
 
 describe("generator", () => {
@@ -144,12 +186,15 @@ for stmt in [s.strip() for s in sql.split(';') if s.strip()]:
             results.append(dict(zip(cols, [str(v) for v in row])))
 print(json.dumps(results))
 `);
-    const out = execSync(`python3 ${pyScript}`, {
-      encoding: "utf-8",
-      cwd: process.cwd(),
-    });
-    rmSync(tmpDir, { recursive: true, force: true });
-    return out;
+    try {
+      const out = execSync(`python3 ${pyScript}`, {
+        encoding: "utf-8",
+        cwd: process.cwd(),
+      });
+      return out;
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
   }
 
   it("all validations pass for department_financial", () => {
@@ -219,6 +264,21 @@ print(json.dumps(results))
     assert.equal(countResult?.cnt, "13");
   });
 
+  it("student_experience enrollment_grade SUM matches source junction table", () => {
+    const se = output.tables.find((t) => t.name === "student_experience")!;
+    const raw = runSQL([
+      output.loadDataSQL,
+      se.sql,
+      `SELECT 'grade_sum' AS test,
+              CASE WHEN ABS(SUM(enrollment_grade) - (SELECT SUM(enrollment_grade) FROM enrollments)) < 0.01
+                   THEN 'PASS' ELSE 'FAIL: bft=' || SUM(enrollment_grade) || ' src=' || (SELECT SUM(enrollment_grade) FROM enrollments) END AS result
+       FROM student_experience`,
+    ]);
+    const results = JSON.parse(raw) as { test: string; result: string }[];
+    const gradeResult = results.find((r) => r.test === "grade_sum");
+    assert.ok(gradeResult?.result.includes("PASS"), `grade sum: ${gradeResult?.result}`);
+  });
+
   it("class_summary enrollment_grade SUM matches source junction table", () => {
     const cs = output.tables.find((t) => t.name === "class_summary")!;
     const raw = runSQL([
@@ -262,12 +322,15 @@ for stmt in [s.strip() for s in sql.split(';') if s.strip()]:
             results.append(dict(zip(cols, [str(v) for v in row])))
 print(json.dumps(results))
 `);
-    const out = execSync(`python3 ${pyScript}`, {
-      encoding: "utf-8",
-      cwd: process.cwd(),
-    });
-    rmSync(tmpDir, { recursive: true, force: true });
-    return out;
+    try {
+      const out = execSync(`python3 ${pyScript}`, {
+        encoding: "utf-8",
+        cwd: process.cwd(),
+      });
+      return out;
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
   }
 
   it("generates two elimination correction branches (one per hop)", () => {
@@ -321,12 +384,15 @@ for stmt in [s.strip() for s in sql.split(';') if s.strip()]:
             results.append(dict(zip(cols, [str(v) for v in row])))
 print(json.dumps(results))
 `);
-    const out = execSync(`python3 ${pyScript}`, {
-      encoding: "utf-8",
-      cwd: process.cwd(),
-    });
-    rmSync(tmpDir, { recursive: true, force: true });
-    return out;
+    try {
+      const out = execSync(`python3 ${pyScript}`, {
+        encoding: "utf-8",
+        cwd: process.cwd(),
+      });
+      return out;
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
   }
 
   it("generates elimination correction and allocation weight", () => {

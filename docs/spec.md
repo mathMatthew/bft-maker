@@ -93,7 +93,7 @@ Report authors must use this pattern. Native `AVERAGE` will produce wrong result
 
 A BFT table contains two kinds of rows:
 
-**Combination rows** come from joining entities through their relationships — one row per link (e.g., one per student-class enrollment). These exist when any metric in the table uses allocation, elimination, or sum/sum. If every metric is reserve, the join never happens and no combination rows exist.
+**Combination rows** come from joining entities through their relationships — one row per link (e.g., one per student-class enrollment). These exist when any metric in the table uses allocation, elimination, or sum/sum. If every metric is reserve, no combination rows are needed conceptually. Note: the current generator does not implement this optimization; reserve-only tables still use the full base join.
 
 **Entity rows** represent a single entity. Foreign entity columns show a placeholder label (default `<Unallocated>`). Reserve and elimination both produce entity rows — one per value of the metric's home entity:
 
@@ -102,7 +102,7 @@ A BFT table contains two kinds of rows:
 
 Allocation and sum/sum live entirely on combination rows and produce no entity rows.
 
-**Row count** = combination rows + entity rows. Example: a Student × Class table (120,000 enrollments, 45,000 students, 1,200 classes). If tuition is allocated to Class and class_budget is reserve for Student: 120,000 combination rows + 1,200 entity rows (one per class) = 121,200. If both metrics are reserve, the join never happens: 45,000 entity rows (students) + 1,200 entity rows (classes) = 46,200 — no combination rows at all.
+**Row count** = combination rows + entity rows. Example: a Student × Class table (120,000 enrollments, 45,000 students, 1,200 classes). If tuition is allocated to Class and class_budget is reserve for Student: 120,000 combination rows + 1,200 entity rows (one per class) = 121,200. If both metrics are reserve, no combination rows are needed: 45,000 entity rows (students) + 1,200 entity rows (classes) = 46,200 — no combination rows at all. (Note: the current generator does not skip the base join for reserve-only tables; this is a future optimization.)
 
 ---
 

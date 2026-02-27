@@ -340,6 +340,61 @@ describe("estimateTableRows — relationship metrics", () => {
     assert.equal(result.rows, 180000);
   });
 
+  it("relationship metric reserve placeholder uses estimated_links", () => {
+    // enrollment_grade lives on Enrollment (Student×Class), BFT includes Professor
+    // with no propagation → reserve for Professor → placeholder rows = estimated_links
+    const manifest: Manifest = {
+      entities,
+      relationships: [
+        { ...enrollment, metrics: [{ name: "enrollment_grade", type: "float", nature: "additive" }] },
+        assignment,
+      ],
+      propagations: [],
+      bft_tables: [{
+        name: "test",
+        entities: ["Student", "Class", "Professor"],
+        metrics: ["enrollment_grade"],
+      }],
+    };
+    const result = estimateTableRows(manifest, manifest.bft_tables[0]);
+    // Home grain = {Student, Class}, Professor is foreign with no propagation → reserve
+    // Placeholder count = estimated_links (120,000) since home is a relationship
+    assert.equal(result.placeholder_row_count, 120000);
+    // Base rows: Student × Class × Professor = 120,000 × (1,800/1,200) = 180,000
+    assert.equal(result.rows, 180000);
+    assert.equal(result.total, 180000 + 120000);
+  });
+
+  it("relationship metric elimination placeholder uses estimated_links", () => {
+    // enrollment_grade on Enrollment (Student×Class), propagated to Professor via elimination
+    // Elimination needs placeholder rows, counted from relationship's estimated_links
+    const manifest: Manifest = {
+      entities,
+      relationships: [
+        { ...enrollment, metrics: [{ name: "enrollment_grade", type: "float", nature: "additive" }] },
+        assignment,
+      ],
+      propagations: [
+        {
+          metric: "enrollment_grade",
+          path: [
+            { relationship: "Assignment", target_entity: "Professor", strategy: "elimination" },
+          ],
+        },
+      ],
+      bft_tables: [{
+        name: "test",
+        entities: ["Student", "Class", "Professor"],
+        metrics: ["enrollment_grade"],
+      }],
+    };
+    const result = estimateTableRows(manifest, manifest.bft_tables[0]);
+    // Elimination in-grain hop → placeholder rows = estimated_links (120,000)
+    assert.equal(result.placeholder_row_count, 120000);
+    assert.equal(result.rows, 180000);
+    assert.equal(result.total, 180000 + 120000);
+  });
+
   it("relationship metric with partial grain coverage", () => {
     // enrollment_grade on Enrollment (Student×Class), but BFT only has Class+Professor
     // Student not in grain → only Class seed from home grain
