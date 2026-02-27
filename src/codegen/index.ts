@@ -8,5 +8,8 @@ export type {
   RelationshipSource,
   TablePlan,
   MetricPlan,
+  DimensionStrategy,
+  GrainGroup,
+  JoinLink,
   GeneratedOutput,
 } from "./types.js";

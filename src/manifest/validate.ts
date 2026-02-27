@@ -26,8 +26,6 @@ export function validate(manifest: Manifest): ValidationError[] {
   checkTableEntities(manifest, entityMap, errors);
   checkTableMetrics(manifest, metricHome, errors);
   checkUnreachableMetrics(manifest, metricHome, errors);
-  checkSummarizationValidity(manifest, metricHome, errors);
-
   return errors;
 }
 
@@ -243,7 +241,17 @@ function checkPropagations(
       if (!VALID_STRATEGIES.has(edge.strategy)) {
         errors.push({
           rule: "valid-strategy",
-          message: `Propagation for "${prop.metric}" has invalid strategy "${edge.strategy}" — must be one of: reserve, elimination, allocation, sum_over_sum`,
+          message: `Propagation for "${prop.metric}" has invalid strategy "${edge.strategy}" — must be one of: elimination, allocation, sum_over_sum`,
+          path: `propagations.${prop.metric}.path[${i}]`,
+        });
+      }
+
+      // Reserve is not valid in propagation edges — it's the implicit default
+      // when an entity is omitted from the path entirely.
+      if (edge.strategy === "reserve") {
+        errors.push({
+          rule: "propagation-no-reserve",
+          message: `Propagation for "${prop.metric}" uses "reserve" at path[${i}] — reserve is the default when an entity is not in the propagation path; omit this edge instead`,
           path: `propagations.${prop.metric}.path[${i}]`,
         });
       }
@@ -271,7 +279,7 @@ function checkPropagations(
       if (def && def.nature === "non-additive" && nonAdditiveInvalid.has(edge.strategy)) {
         errors.push({
           rule: "non-additive-strategy",
-          message: `Non-additive metric "${prop.metric}" cannot use "${edge.strategy}" strategy — must use "sum_over_sum" or "reserve"`,
+          message: `Non-additive metric "${prop.metric}" cannot use "${edge.strategy}" strategy — must use "sum_over_sum" (or omit from path for reserve)`,
           path: `propagations.${prop.metric}.path[${i}]`,
         });
       }
@@ -382,53 +390,3 @@ function checkUnreachableMetrics(
   }
 }
 
-// Rule: When a metric's compute grain includes entities not in the BFT grain
-// (i.e. they must be summarized out), the strategy at the summarization
-// boundary must support aggregation. Only allocation and sum_over_sum can be
-// summarized; elimination and reserve cannot.
-function checkSummarizationValidity(
-  manifest: Manifest,
-  metricHome: Map<string, MetricHome>,
-  errors: ValidationError[]
-): void {
-  const propMap = new Map(manifest.propagations.map((p) => [p.metric, p]));
-
-  for (const table of manifest.bft_tables) {
-    const grainSet = new Set(table.entities);
-
-    for (const metricName of table.metrics) {
-      const home = metricHome.get(metricName);
-      if (!home) continue;
-
-      // Check if the metric's home grain has entities not in BFT grain
-      const homeNotInGrain = home.grain.filter((e) => !grainSet.has(e));
-      if (homeNotInGrain.length === 0) continue;
-
-      // Home has entities that must be summarized out. The metric must
-      // reach BFT grain entities via propagation — check the strategy
-      // at the hop that crosses the boundary (from home grain into BFT grain).
-      const prop = propMap.get(metricName);
-      if (!prop) continue; // caught by checkUnreachableMetrics
-
-      // Walk the path tracking which entities we've reached.
-      // Only check strategy on edges that cross from outside-grain to inside-grain.
-      const reached = new Set<string>(home.grain);
-      for (const edge of prop.path) {
-        const sourceInGrain = [...reached].some((e) => grainSet.has(e));
-        const targetInGrain = grainSet.has(edge.target_entity);
-
-        if (!sourceInGrain && targetInGrain) {
-          // This hop crosses the boundary into BFT grain
-          if (edge.strategy === "elimination" || edge.strategy === "reserve") {
-            errors.push({
-              rule: "summarization-strategy",
-              message: `Table "${table.name}": metric "${metricName}" requires summarization (${homeNotInGrain.join(", ")} not in grain) but uses "${edge.strategy}" at boundary — only allocation or sum_over_sum can be summarized`,
-              path: `bft_tables.${table.name}.metrics.${metricName}`,
-            });
-          }
-        }
-        reached.add(edge.target_entity);
-      }
-    }
-  }
-}

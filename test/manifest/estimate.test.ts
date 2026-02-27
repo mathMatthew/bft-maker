@@ -234,7 +234,7 @@ describe("estimateTableRows", () => {
           metric: "tuition_paid",
           path: [
             { relationship: "Enrollment", target_entity: "Class", strategy: "allocation", weight: "enrollment_share" },
-            { relationship: "Assignment", target_entity: "Professor", strategy: "reserve" },
+            { relationship: "Assignment", target_entity: "Professor", strategy: "elimination" },
           ],
         },
       ],

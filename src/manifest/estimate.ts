@@ -162,48 +162,58 @@ export function estimateTableRows(manifest: Manifest, table: BftTable): RowEstim
   // Elimination: class_budget (Class) eliminated toward Student means every
   // Student row shows the full budget. Each class gets a row carrying a
   // negative offset so SUM equals the true total.
-  const placeholderEntities = new Set<string>();
+  // Track placeholder homes to avoid double-counting. Key is the home name
+  // (entity or relationship), value is the estimated row count.
+  const placeholderHomes = new Map<string, number>();
+  const relMap = new Map(manifest.relationships.map((r) => [r.name, r]));
+
   for (const metricName of table.metrics) {
     const home = metricHome.get(metricName);
     if (!home) continue;
 
     // Only relevant if at least one home grain entity is in the BFT grain
     if (!home.grain.some((e) => grainSet.has(e))) continue;
-    const homeEntitiesInGrain = home.grain.filter((e) => grainSet.has(e));
 
     // Foreign entities: grain entities not covered by the metric's home grain
     const foreignEntities = grainEntities.filter((e) => !home.grain.includes(e));
 
+    let needsPlaceholder = false;
     const prop = propMap.get(metricName);
     if (!prop) {
       // No propagation = pure reserve for all foreign entities.
-      // Needs placeholder rows if there are foreign entities in the grain.
-      if (foreignEntities.length > 0) {
-        for (const e of homeEntitiesInGrain) placeholderEntities.add(e);
-      }
+      needsPlaceholder = foreignEntities.length > 0;
     } else {
-      // Only count hops whose target entity is in the grain
+      // Check if any in-grain hop uses elimination
       for (const edge of prop.path) {
         if (!grainSet.has(edge.target_entity)) continue;
-        if (edge.strategy === "reserve" || edge.strategy === "elimination") {
-          for (const e of homeEntitiesInGrain) placeholderEntities.add(e);
+        if (edge.strategy === "elimination") {
+          needsPlaceholder = true;
+          break;
         }
+      }
+    }
+
+    if (needsPlaceholder && !placeholderHomes.has(home.name)) {
+      if (home.kind === "relationship") {
+        const rel = relMap.get(home.name);
+        placeholderHomes.set(home.name, rel?.estimated_links ?? 0);
+      } else {
+        const entity = entityMap.get(home.name);
+        placeholderHomes.set(home.name, entity?.estimated_rows ?? 0);
       }
     }
   }
 
   let placeholderRowCount = 0;
-  for (const entityName of placeholderEntities) {
-    const entity = entityMap.get(entityName);
-    if (entity) placeholderRowCount += entity.estimated_rows;
+  for (const count of placeholderHomes.values()) {
+    placeholderRowCount += count;
   }
 
   if (placeholderRowCount > 0) {
     breakdown.push(
-      `Placeholder rows: +${placeholderRowCount} (${[...placeholderEntities].map((name) => {
-        const e = entityMap.get(name);
-        return `${name}: ${e?.estimated_rows ?? 0}`;
-      }).join(", ")})`
+      `Placeholder rows: +${placeholderRowCount} (${[...placeholderHomes.entries()].map(
+        ([name, count]) => `${name}: ${count}`
+      ).join(", ")})`
     );
   }
 

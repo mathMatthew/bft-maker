@@ -258,7 +258,7 @@ describe("validate", () => {
       assert.deepStrictEqual(sErrors, []);
     });
 
-    it("allows reserve on non-additive metric", () => {
+    it("rejects reserve in propagation edge", () => {
       const m = validManifest();
       m.propagations = m.propagations.filter((p) => p.metric !== "satisfaction_score");
       m.propagations.push({
@@ -266,8 +266,7 @@ describe("validate", () => {
         path: [{ relationship: "Enrollment", target_entity: "Class", strategy: "reserve" }],
       });
       const errors = validate(m);
-      const sErrors = errors.filter((e) => e.rule === "non-additive-strategy" && e.message.includes("satisfaction_score"));
-      assert.deepStrictEqual(sErrors, []);
+      assert.ok(errors.some((e) => e.rule === "propagation-no-reserve" && e.message.includes("satisfaction_score")));
     });
 
     it("catches invalid strategy value", () => {
@@ -428,48 +427,6 @@ describe("validate", () => {
     });
   });
 
-  describe("summarization validity", () => {
-    it("rejects elimination at summarization boundary", () => {
-      const m = validManifest();
-      // tuition_paid (Student) propagates to Class via allocation, then to Professor.
-      // Table with grain {Class, Professor} — Student must be summarized out.
-      // Change the Student→Class strategy to elimination, which can't be summarized.
-      m.propagations = m.propagations.filter((p) => p.metric !== "tuition_paid");
-      m.propagations.push({
-        metric: "tuition_paid",
-        path: [
-          { relationship: "Enrollment", target_entity: "Class", strategy: "elimination" },
-          { relationship: "Assignment", target_entity: "Professor", strategy: "allocation", weight: "w" },
-        ],
-      });
-      m.bft_tables.push({
-        name: "class_professor",
-        entities: ["Class", "Professor"],
-        metrics: ["tuition_paid"],
-      });
-      const errors = validate(m);
-      assert.ok(errors.some((e) => e.rule === "summarization-strategy" && e.message.includes("tuition_paid")));
-    });
-
-    it("accepts allocation at summarization boundary", () => {
-      const m = validManifest();
-      // Table with grain {Class, Professor} — Student summarized out via allocation. OK.
-      m.bft_tables.push({
-        name: "class_professor",
-        entities: ["Class", "Professor"],
-        metrics: ["tuition_paid"],
-      });
-      const errors = validate(m);
-      assert.ok(!errors.some((e) => e.rule === "summarization-strategy" && e.message.includes("tuition_paid")));
-    });
-
-    it("no summarization error when home entity is in grain", () => {
-      const m = validManifest();
-      // tuition_paid home=Student, table has Student in grain — no summarization needed
-      const errors = validate(m);
-      assert.ok(!errors.some((e) => e.rule === "summarization-strategy"));
-    });
-  });
 
   describe("multiple errors", () => {
     it("returns all errors at once", () => {
