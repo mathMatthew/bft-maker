@@ -92,11 +92,11 @@ describe("generator", () => {
     assert.ok(df.sql.includes("Reserve placeholder rows for salary"));
     // Propagation + correction branches for class_budget
     assert.ok(df.sql.includes("class_budget propagation data rows"));
-    assert.ok(df.sql.includes("class_budget elimination correction rows"));
+    assert.ok(df.sql.includes("class_budget elimination correction (hop 0)"));
 
     const se = output.tables.find((t) => t.name === "student_experience")!;
     assert.ok(se.sql.includes('CREATE OR REPLACE TABLE "se_base"'));
-    assert.ok(se.sql.includes("class_budget elimination correction rows"));
+    assert.ok(se.sql.includes("class_budget elimination correction (hop 0)"));
     // Sum/Sum weight
     assert.ok(se.sql.includes("satisfaction_score_weight"));
     // Junction metric
@@ -232,5 +232,126 @@ print(json.dumps(results))
     const results = JSON.parse(raw) as { test: string; result: string }[];
     const gradeResult = results.find((r) => r.test === "grade_sum");
     assert.ok(gradeResult?.result.includes("PASS"), `grade sum: ${gradeResult?.result}`);
+  });
+});
+
+describe("multi-hop elimination", () => {
+  const manifest = loadManifest("data/university/manifest-multihop-elim.yaml");
+  const output = generate(manifest, { dataDir: "data/university" });
+
+  const tmpDir = join(process.cwd(), ".tmp-test-multihop");
+
+  function runSQL(sqlParts: string[]): string {
+    mkdirSync(tmpDir, { recursive: true });
+    const sqlPath = join(tmpDir, "combined.sql");
+    writeFileSync(sqlPath, sqlParts.join("\n\n"));
+
+    const pyScript = join(tmpDir, "run.py");
+    writeFileSync(pyScript, `
+import duckdb, json
+con = duckdb.connect()
+sql = open("${sqlPath}").read()
+results = []
+for stmt in [s.strip() for s in sql.split(';') if s.strip()]:
+    lines = [l for l in stmt.split('\\n') if l.strip() and not l.strip().startswith('--')]
+    if not lines: continue
+    result = con.execute(stmt)
+    if lines[0].strip().split()[0].upper() == 'SELECT':
+        cols = [d[0] for d in result.description]
+        for row in result.fetchall():
+            results.append(dict(zip(cols, [str(v) for v in row])))
+print(json.dumps(results))
+`);
+    const out = execSync(`python3 ${pyScript}`, {
+      encoding: "utf-8",
+      cwd: process.cwd(),
+    });
+    rmSync(tmpDir, { recursive: true, force: true });
+    return out;
+  }
+
+  it("generates two elimination correction branches (one per hop)", () => {
+    const pi = output.tables.find((t) => t.name === "professor_impact")!;
+    assert.ok(pi.sql.includes("salary elimination correction (hop 0)"));
+    assert.ok(pi.sql.includes("salary elimination correction (hop 1)"));
+  });
+
+  it("hop 0 correction anchors at Professor, hop 1 at Professor+Class", () => {
+    const pi = output.tables.find((t) => t.name === "professor_impact")!;
+    // Hop 0: GROUP BY professor columns + salary
+    assert.ok(pi.sql.includes('GROUP BY "professor_id", "professor_name", "salary"'));
+    // Hop 1: GROUP BY professor + class columns + salary
+    assert.ok(pi.sql.includes('GROUP BY "professor_id", "professor_name", "class_id", "class_name", "salary"'));
+  });
+
+  it("SUM(salary) matches source professors table", () => {
+    const pi = output.tables.find((t) => t.name === "professor_impact")!;
+    const raw = runSQL([output.loadDataSQL, pi.sql]);
+    const results = JSON.parse(raw) as { test: string; result: string }[];
+    for (const r of results) {
+      assert.ok(r.result.includes("PASS"), `${r.test}: ${r.result}`);
+    }
+  });
+});
+
+describe("elimination + allocation composition", () => {
+  const manifest = loadManifest("data/university/manifest-elim-alloc.yaml");
+  const output = generate(manifest, { dataDir: "data/university" });
+
+  const tmpDir = join(process.cwd(), ".tmp-test-elim-alloc");
+
+  function runSQL(sqlParts: string[]): string {
+    mkdirSync(tmpDir, { recursive: true });
+    const sqlPath = join(tmpDir, "combined.sql");
+    writeFileSync(sqlPath, sqlParts.join("\n\n"));
+
+    const pyScript = join(tmpDir, "run.py");
+    writeFileSync(pyScript, `
+import duckdb, json
+con = duckdb.connect()
+sql = open("${sqlPath}").read()
+results = []
+for stmt in [s.strip() for s in sql.split(';') if s.strip()]:
+    lines = [l for l in stmt.split('\\n') if l.strip() and not l.strip().startswith('--')]
+    if not lines: continue
+    result = con.execute(stmt)
+    if lines[0].strip().split()[0].upper() == 'SELECT':
+        cols = [d[0] for d in result.description]
+        for row in result.fetchall():
+            results.append(dict(zip(cols, [str(v) for v in row])))
+print(json.dumps(results))
+`);
+    const out = execSync(`python3 ${pyScript}`, {
+      encoding: "utf-8",
+      cwd: process.cwd(),
+    });
+    rmSync(tmpDir, { recursive: true, force: true });
+    return out;
+  }
+
+  it("generates elimination correction and allocation weight", () => {
+    const t = output.tables.find((t) => t.name === "elim_alloc_test")!;
+    // Elimination correction for hop 0 (Professor → Class)
+    assert.ok(t.sql.includes("salary elimination correction (hop 0)"));
+    // Allocation weight for hop 1 (Class → Student)
+    assert.ok(t.sql.includes("enrollment_count"));
+    // No hop 1 correction (allocation doesn't generate correction rows)
+    assert.ok(!t.sql.includes("hop 1"));
+  });
+
+  it("allocation weight partitions by home + prior elimination hop", () => {
+    const t = output.tables.find((t) => t.name === "elim_alloc_test")!;
+    // Weight should partition by professor_id (home) + class_id (prior elim hop)
+    assert.ok(t.sql.includes('PARTITION BY "professor_id", "class_id"'));
+  });
+
+  it("all validations pass — SUM(salary) matches source", () => {
+    const t = output.tables.find((t) => t.name === "elim_alloc_test")!;
+    const raw = runSQL([output.loadDataSQL, t.sql]);
+    const results = JSON.parse(raw) as { test: string; result: string }[];
+    for (const r of results) {
+      assert.ok(r.result.includes("PASS"), `${r.test}: ${r.result}`);
+    }
+    assert.ok(results.length >= 2, `Expected at least 2 validation checks, got ${results.length}`);
   });
 });

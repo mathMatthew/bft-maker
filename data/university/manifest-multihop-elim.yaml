@@ -1,0 +1,55 @@
+entities:
+  - name: Student
+    role: leaf
+    detail: true
+    estimated_rows: 30
+    metrics:
+      - name: tuition_paid
+        type: currency
+        nature: additive
+
+  - name: Class
+    role: bridge
+    detail: true
+    estimated_rows: 10
+    metrics:
+      - name: class_budget
+        type: currency
+        nature: additive
+
+  - name: Professor
+    role: leaf
+    detail: true
+    estimated_rows: 5
+    metrics:
+      - name: salary
+        type: currency
+        nature: additive
+
+relationships:
+  - name: Enrollment
+    between: [Student, Class]
+    type: many-to-many
+    estimated_links: 90
+
+  - name: Assignment
+    between: [Class, Professor]
+    type: many-to-many
+    estimated_links: 13
+
+propagations:
+  # salary (Professor) eliminates through both hops to Class and Student.
+  # Tests multi-hop elimination: two independent correction branches.
+  - metric: salary
+    path:
+      - relationship: Assignment
+        target_entity: Class
+        strategy: elimination
+      - relationship: Enrollment
+        target_entity: Student
+        strategy: elimination
+
+bft_tables:
+  - name: professor_impact
+    entities: [Professor, Class, Student]
+    metrics: [salary]

@@ -2,6 +2,7 @@ import type { Manifest } from "../manifest/types.js";
 import type {
   TablePlan,
   MetricPlan,
+  DimensionStrategy,
   SourceMapping,
   GeneratedOutput,
   GrainGroup,
@@ -456,7 +457,10 @@ function assemblySQL(
       }
 
       if (hasElimDims) {
-        branches.push(elimCorrectionBranch(plan, metric, allMetrics, sm, prefix, placeholderLabel));
+        const elimDims = metric.propagatedDimensions.filter((d) => d.strategy === "elimination");
+        for (const elimDim of elimDims) {
+          branches.push(elimCorrectionBranch(plan, metric, elimDim, allMetrics, sm, prefix, placeholderLabel));
+        }
       }
     }
   }
@@ -516,7 +520,10 @@ function multiGroupAssemblySQL(
       }
 
       if (hasElimDims) {
-        branches.push(elimCorrectionBranch(plan, metric, allMetrics, sm, prefix, placeholderLabel));
+        const elimDims = metric.propagatedDimensions.filter((d) => d.strategy === "elimination");
+        for (const elimDim of elimDims) {
+          branches.push(elimCorrectionBranch(plan, metric, elimDim, allMetrics, sm, prefix, placeholderLabel));
+        }
       }
     }
   }
@@ -764,26 +771,37 @@ function propagationDataBranch(
 function elimCorrectionBranch(
   plan: TablePlan,
   metric: MetricPlan,
+  elimDim: DimensionStrategy,
   allMetrics: MetricPlan[],
   sm: SourceMapping,
   prefix: string,
   label: string
 ): string {
-  const home = homeEntity(metric);
-  const homeEs = sm.entities[home];
-  const elimDims = metric.propagatedDimensions.filter((d) => d.strategy === "elimination");
-  const firstElimTarget = sm.entities[elimDims[0].entity];
+  const elimTarget = sm.entities[elimDim.entity];
+  const elimHopIndex = elimDim.hopIndex ?? 0;
 
-  const lines: string[] = [`-- ${metric.name} elimination correction rows`];
+  // Anchor entities: home grain + all propagated entities from earlier hops
+  const anchorSet = new Set<string>(metric.home.grain);
+  for (const d of metric.propagatedDimensions) {
+    if (d.strategy === "reserve") continue;
+    if ((d.hopIndex ?? 0) < elimHopIndex) {
+      anchorSet.add(d.entity);
+    }
+  }
+
+  const lines: string[] = [`-- ${metric.name} elimination correction (hop ${elimHopIndex})`];
   lines.push("SELECT");
 
   const cols: string[] = [];
+  const groupCols: string[] = [];
   for (const entityName of plan.bftGrain) {
     const es = sm.entities[entityName];
     const nameCol = q(entityName.toLowerCase() + "_name");
-    if (entityName === home) {
+    if (anchorSet.has(entityName)) {
       cols.push(q(es.idColumn));
       cols.push(nameCol);
+      groupCols.push(q(es.idColumn));
+      groupCols.push(nameCol);
     } else {
       cols.push(`NULL AS ${q(es.idColumn)}`);
       cols.push(`'${label}' AS ${nameCol}`);
@@ -792,7 +810,7 @@ function elimCorrectionBranch(
 
   for (const m of allMetrics) {
     if (m.name === metric.name) {
-      cols.push(`${q(m.name)} * (1 - COUNT(DISTINCT ${q(firstElimTarget.idColumn)})) AS ${q(m.name)}`);
+      cols.push(`${q(m.name)} * (1 - COUNT(DISTINCT ${q(elimTarget.idColumn)})) AS ${q(m.name)}`);
     } else {
       cols.push(`0 AS ${q(m.name)}`);
       if (m.nature === "non-additive") {
@@ -803,7 +821,7 @@ function elimCorrectionBranch(
 
   lines.push(cols.map((c) => `    ${c}`).join(",\n"));
 
-  const groupCols = [q(homeEs.idColumn), q(home.toLowerCase() + "_name"), q(metric.name)];
+  groupCols.push(q(metric.name));
   lines.push(`FROM ${q(prefix + "_base")}`);
   lines.push(`GROUP BY ${groupCols.join(", ")}`);
 

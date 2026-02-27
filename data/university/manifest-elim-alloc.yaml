@@ -1,0 +1,56 @@
+entities:
+  - name: Student
+    role: leaf
+    detail: true
+    estimated_rows: 30
+    metrics:
+      - name: tuition_paid
+        type: currency
+        nature: additive
+
+  - name: Class
+    role: bridge
+    detail: true
+    estimated_rows: 10
+    metrics:
+      - name: class_budget
+        type: currency
+        nature: additive
+
+  - name: Professor
+    role: leaf
+    detail: true
+    estimated_rows: 5
+    metrics:
+      - name: salary
+        type: currency
+        nature: additive
+
+relationships:
+  - name: Enrollment
+    between: [Student, Class]
+    type: many-to-many
+    estimated_links: 90
+
+  - name: Assignment
+    between: [Class, Professor]
+    type: many-to-many
+    estimated_links: 13
+
+propagations:
+  # salary (Professor) eliminates to Class, then allocates to Student.
+  # Tests elim+alloc composition: correction for Class fan-out + weight division for Student.
+  - metric: salary
+    path:
+      - relationship: Assignment
+        target_entity: Class
+        strategy: elimination
+      - relationship: Enrollment
+        target_entity: Student
+        strategy: allocation
+        weight: enrollment_share
+
+bft_tables:
+  - name: elim_alloc_test
+    entities: [Professor, Class, Student]
+    metrics: [salary]

@@ -6,7 +6,7 @@ Address issues surfaced during the PR #4 code review that weren't blocking merge
 ## Status: In Progress
 
 ## Current State
-**9 of 23 items resolved** (1–7, 15, 16). All on branch `fix/validator-summarization-reserve`. 81 tests pass.
+**11 of 23 items resolved** (1–7, 9, 12, 15, 16). All on branch `fix/validator-summarization-reserve`. 87 tests pass.
 
 Key changes so far:
 - Removed `checkSummarizationValidity` — all strategies survive summarization (elimination correction rows sum correctly through GROUP BY)
@@ -15,6 +15,7 @@ Key changes so far:
 - Added `q()` SQL identifier quoting throughout generator.ts
 - Fixed shared path reference in YAML expansion, removed unused var
 - **Removed `classifyBehavior` and `MetricBehavior` entirely** — strategies now compose as independent pipeline steps instead of being classified into monolithic behavior categories. Fixes the broken elimination + allocation combo case. See item #4 for details.
+- **Fixed multi-hop elimination** — `elimCorrectionBranch` now generates one correction branch per elimination hop (not one per metric). Each hop anchors at home + all prior-hop entities. DuckDB-validated with new `professor_impact` test table (salary: Professor → Class elim → Student elim).
 
 ## Issues
 
@@ -31,7 +32,7 @@ Key changes so far:
    - `propagationDataBranch` (new): SELECT DISTINCT from weighted table for metrics with reserve dims + propagation — handles any strategy combo
    - `elimCorrectionBranch` (new): uses COUNT(DISTINCT target_id) from base table — works regardless of reserve dims
    - `collectWeights` now generates weights for ANY metric with allocation dims (previously skipped mixed/elim metrics) and partitions by ALL prior hops regardless of strategy
-   - Verified mathematically: all 4 two-hop strategy combos (elim+elim, elim+alloc, alloc+elim, alloc+alloc) compose correctly as independent pipeline steps
+   - Multi-hop elimination now generates per-hop correction branches; DuckDB-validated with `professor_impact` test (Professor → Class elim → Student elim). elim+alloc and alloc+elim combos verified mathematically but not yet integration-tested.
 
 5. ~~**Shared path reference in `expandPropagations`**~~ → **RESOLVED.** Each expanded propagation now gets a shallow copy of each path edge via `prop.path.map(e => ({...e}))`.
 
@@ -44,8 +45,7 @@ Key changes so far:
 8. **Run script hardcodes directory depth**
    `generator.ts` ~line 1003: `REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"` assumes output is exactly 3 levels below repo root.
 
-9. **Missing type re-exports from `codegen/index.ts`**
-   `GrainGroup`, `JoinLink`, `DimensionStrategy` are used in exported `TablePlan`/`MetricPlan` types but aren't re-exported. (`MetricBehavior` no longer exists.)
+9. ~~**Missing type re-exports from `codegen/index.ts`**~~ → **RESOLVED.** Added `DimensionStrategy`, `GrainGroup`, `JoinLink` to the re-exports.
 
 10. **`baseGrainBranch` vs `groupBaseBranch` logic duplication**
     These two functions duplicate significant logic and could be unified.
@@ -73,10 +73,14 @@ Key changes so far:
 
 20. **Temp file leak in `runSQL` test helper** — if `execSync` throws, no try/finally cleanup.
 
+### Future
+
+24. **Validator should reject non-identifier characters in names** — entity, relationship, metric, and table names with quotes, spaces, or special chars will cause problems in generated SQL and file paths. Add an early validation rule that restricts names to `[A-Za-z0-9_]`.
+
 ### Doc Inconsistencies
 
 21. **spec.md** claims reserve-only tables skip the base join; the generator doesn't implement this. Flag as future optimization or remove the claim.
 
 22. **system-design.md** claims integration tests assert junction metric SUM for student_experience, but no such check exists for that table.
 
-23. **P3_GRAIN_AWARE.md** states "all existing 71 tests pass" but suite now has 84.
+23. **P3_GRAIN_AWARE.md** states "all existing 71 tests pass" but suite now has 84. (Stale doc — P3 is complete and merged.)
