@@ -174,6 +174,88 @@ propagations:
     assert.equal(parsed.propagations[2].path[0].strategy, "elimination");
   });
 
+  it("round-trips relationship metrics on relationships", () => {
+    const original: Manifest = {
+      entities: [
+        {
+          name: "Student",
+          role: "leaf",
+          detail: true,
+          estimated_rows: 45000,
+          metrics: [
+            { name: "tuition_paid", type: "currency", nature: "additive" },
+          ],
+        },
+        {
+          name: "Class",
+          role: "bridge",
+          detail: true,
+          estimated_rows: 1200,
+          metrics: [
+            { name: "class_budget", type: "currency", nature: "additive" },
+          ],
+        },
+        {
+          name: "Professor",
+          role: "leaf",
+          detail: true,
+          estimated_rows: 800,
+          metrics: [],
+        },
+      ],
+      relationships: [
+        {
+          name: "Enrollment",
+          between: ["Student", "Class"],
+          type: "many-to-many",
+          estimated_links: 120000,
+          metrics: [
+            { name: "enrollment_grade", type: "float", nature: "additive" },
+            { name: "attendance_rate", type: "percentage", nature: "non-additive" },
+          ],
+        },
+        {
+          name: "Assignment",
+          between: ["Class", "Professor"],
+          type: "many-to-many",
+          estimated_links: 1800,
+        },
+      ],
+      propagations: [
+        {
+          metric: "enrollment_grade",
+          path: [
+            { relationship: "Assignment", target_entity: "Professor", strategy: "allocation", weight: "assignment_share" },
+          ],
+        },
+      ],
+      bft_tables: [
+        {
+          name: "full_view",
+          entities: ["Student", "Class", "Professor"],
+          metrics: ["tuition_paid", "enrollment_grade", "attendance_rate"],
+        },
+      ],
+    };
+    const yamlStr = serializeManifest(original);
+    const parsed = parseManifest(yamlStr);
+
+    // Relationship metrics survive the round-trip
+    assert.equal(parsed.relationships[0].metrics?.length, 2);
+    assert.equal(parsed.relationships[0].metrics![0].name, "enrollment_grade");
+    assert.equal(parsed.relationships[0].metrics![0].type, "float");
+    assert.equal(parsed.relationships[0].metrics![0].nature, "additive");
+    assert.equal(parsed.relationships[0].metrics![1].name, "attendance_rate");
+    assert.equal(parsed.relationships[0].metrics![1].type, "percentage");
+    assert.equal(parsed.relationships[0].metrics![1].nature, "non-additive");
+
+    // Relationship without metrics has no metrics key (or undefined)
+    assert.ok(!parsed.relationships[1].metrics || parsed.relationships[1].metrics.length === 0);
+
+    // Full structural equality
+    assert.deepStrictEqual(parsed, original);
+  });
+
   it("rejects non-object YAML", () => {
     assert.throws(() => parseManifest("just a string"), {
       message: /Invalid manifest/,

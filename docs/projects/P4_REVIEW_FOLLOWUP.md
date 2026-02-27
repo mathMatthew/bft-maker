@@ -6,7 +6,7 @@ Address issues surfaced during the PR #4 code review that weren't blocking merge
 ## Status: In Progress
 
 ## Current State
-**11 of 23 items resolved** (1–7, 9, 12, 15, 16). All on branch `fix/validator-summarization-reserve`. 87 tests pass.
+**19 of 23 items resolved** (1–7, 9, 12–14, 15–22). 93 tests pass.
 
 Key changes so far:
 - Removed `checkSummarizationValidity` — all strategies survive summarization (elimination correction rows sum correctly through GROUP BY)
@@ -57,21 +57,21 @@ Key changes so far:
 
 ### Missing Tests
 
-13. **No planner unit test for class_summary** — summarization, grain grouping, and `needsSummarization=true` only covered by DuckDB integration tests.
+13. ~~**No planner unit test for class_summary**~~ → **RESOLVED.** Added test for summarization, grain grouping, and `needsSummarization=true`.
 
-14. **No planner test for `enrollment_grade`** (junction metric) in student_experience or department_financial.
+14. ~~**No planner test for `enrollment_grade`**~~ → **RESOLVED.** Added test verifying junction metric home grain, kind, and natural-grain handling.
 
 15. ~~**No validation test for `reserve` at summarization boundary**~~ → **RESOLVED: summarization check removed; reserve-in-path rejection test added.**
 
 16. ~~**No validation test for `sum_over_sum` accepted at summarization boundary**~~ → **RESOLVED: summarization check removed; no boundary check exists.**
 
-17. **No estimator test for relationship metric with reserve/elimination placeholders**.
+17. ~~**No estimator test for relationship metric with reserve/elimination placeholders**~~ → **RESOLVED.** Added tests for reserve and elimination placeholder counting using `estimated_links`.
 
-18. **No YAML round-trip test for relationship metrics**.
+18. ~~**No YAML round-trip test for relationship metrics**~~ → **RESOLVED.** Added test verifying relationship metrics survive serialize/parse round-trip.
 
-19. **No reference SQL validation for `enrollment_grade` in student_experience** or for `satisfaction_score` weighted average.
+19. ~~**No reference SQL validation for `enrollment_grade` in student_experience**~~ → **RESOLVED.** Added DuckDB validation for enrollment_grade SUM in student_experience. (satisfaction_score weighted average validation not added — deferred.)
 
-20. **Temp file leak in `runSQL` test helper** — if `execSync` throws, no try/finally cleanup.
+20. ~~**Temp file leak in `runSQL` test helper**~~ → **RESOLVED.** Added try/finally to all three `runSQL` functions.
 
 ### Future
 
@@ -79,8 +79,8 @@ Key changes so far:
 
 ### Doc Inconsistencies
 
-21. **spec.md** claims reserve-only tables skip the base join; the generator doesn't implement this. Flag as future optimization or remove the claim.
+21. ~~**spec.md** claims reserve-only tables skip the base join~~ → **RESOLVED.** Added notes that the current generator does not implement this optimization.
 
-22. **system-design.md** claims integration tests assert junction metric SUM for student_experience, but no such check exists for that table.
+22. ~~**system-design.md** claims junction metric SUM test for student_experience~~ → **RESOLVED.** Corrected to note it's class_summary only.
 
-23. **P3_GRAIN_AWARE.md** states "all existing 71 tests pass" but suite now has 84. (Stale doc — P3 is complete and merged.)
+23. ~~**P3_GRAIN_AWARE.md** stale test count~~ → **RESOLVED.** File already deleted after P3 merge.

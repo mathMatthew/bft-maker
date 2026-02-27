@@ -329,7 +329,7 @@ The `data/` directory contains manifests exercising different patterns:
 2. Execute against DuckDB with reference data
 3. Assert all validation queries return PASS
 4. Assert expected row counts (department_financial: 218, student_experience: 100, class_summary: 13)
-5. Assert SUM of junction metrics matches source junction table
+5. Assert SUM of junction metrics matches source junction table (class_summary only)
 
 ---
 
