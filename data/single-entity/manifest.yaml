@@ -1,0 +1,21 @@
+# Single entity — degenerate case, no relationships or foreign metrics.
+# The BFT is just the source table with no propagation logic.
+
+entities:
+  - name: Product
+    role: leaf
+    detail: true
+    estimated_rows: 5
+    label_column: product_name
+    metrics:
+      - name: revenue
+        type: currency
+        nature: additive
+
+relationships: []
+propagations: []
+
+bft_tables:
+  - name: product_report
+    entities: [Product]
+    metrics: [revenue]

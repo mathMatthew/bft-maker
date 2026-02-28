@@ -22,9 +22,9 @@ export function defaultSourceMapping(manifest: Manifest): SourceMapping {
   for (const e of manifest.entities) {
     const lower = e.name.toLowerCase();
     entities[e.name] = {
-      table: pluralize(lower),
-      idColumn: `${lower}_id`,
-      labelColumn: "name",
+      table: e.source_table ?? pluralize(lower),
+      idColumn: e.id_column ?? `${lower}_id`,
+      labelColumn: e.label_column ?? "name",
     };
   }
 
@@ -32,10 +32,10 @@ export function defaultSourceMapping(manifest: Manifest): SourceMapping {
   for (const r of manifest.relationships) {
     const columns: Record<string, string> = {};
     for (const entityName of r.between) {
-      columns[entityName] = entities[entityName].idColumn;
+      columns[entityName] = r.columns?.[entityName] ?? entities[entityName].idColumn;
     }
     relationships[r.name] = {
-      table: pluralize(r.name.toLowerCase()),
+      table: r.source_table ?? pluralize(r.name.toLowerCase()),
       columns,
     };
   }
@@ -68,8 +68,9 @@ export function planTable(manifest: Manifest, table: BftTable, sourceMapping: So
     if (!home) throw new Error(`Metric "${metricName}" not found on any entity or relationship`);
     const def = findMetricDef(manifest.entities, manifest.relationships, metricName)!;
     const propagation = manifest.propagations.find((p) => p.metric === metricName);
+    const sourceColumn = def.source_column ?? metricName;
 
-    return planMetric(metricName, home, def.nature, propagation, bftGrainSet, bftGrain);
+    return planMetric(metricName, sourceColumn, home, def.nature, propagation, bftGrainSet, bftGrain);
   });
 
   // Group metrics by computeGrain
@@ -83,6 +84,7 @@ export function planTable(manifest: Manifest, table: BftTable, sourceMapping: So
  */
 function planMetric(
   metricName: string,
+  sourceColumn: string,
   home: MetricHome,
   nature: "additive" | "non-additive",
   propagation: { path: { relationship: string; target_entity: string; strategy: Strategy; weight?: string }[] } | undefined,
@@ -142,6 +144,7 @@ function planMetric(
     name: metricName,
     home,
     nature,
+    sourceColumn,
     propagatedDimensions: allDimensions,
     computeGrain,
     reserveDimensions,

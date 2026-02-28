@@ -40,6 +40,8 @@ export interface MetricPlan {
   name: string;
   home: MetricHome;
   nature: "additive" | "non-additive";
+  /** Source column name in the CSV/table (defaults to name if not overridden). */
+  sourceColumn: string;
 
   /** Strategy for each non-home entity in the compute grain */
   propagatedDimensions: DimensionStrategy[];

@@ -10,8 +10,10 @@ export const VALID_STRATEGIES: ReadonlySet<string> = new Set([
 
 export interface MetricDef {
   name: string;
-  type: "currency" | "integer" | "float" | "rating" | "percentage";
+  type: "currency" | "integer" | "float" | "rating" | "percentage" | "score";
   nature: "additive" | "non-additive";
+  /** Override the source column name if it differs from the metric name. */
+  source_column?: string;
 }
 
 export interface Entity {
@@ -20,6 +22,12 @@ export interface Entity {
   detail: boolean;
   estimated_rows: number;
   metrics: MetricDef[];
+  /** Override the default table name (default: pluralized lowercase entity name). */
+  source_table?: string;
+  /** Override the default id column name (default: lowercase_name + "_id"). */
+  id_column?: string;
+  /** Override the default label column name (default: "name"). */
+  label_column?: string;
 }
 
 /** Relationships are undirected — they describe what joins exist. */
@@ -30,6 +38,10 @@ export interface Relationship {
   estimated_links: number;
   weight_column?: string;
   metrics?: MetricDef[];
+  /** Override the default table name (default: pluralized lowercase relationship name). */
+  source_table?: string;
+  /** Override the default foreign key column names. Keys are entity names, values are column names. */
+  columns?: Record<string, string>;
 }
 
 /**
