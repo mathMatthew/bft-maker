@@ -95,6 +95,41 @@ describe("validate", () => {
     assert.deepStrictEqual(errors, []);
   });
 
+  describe("identifier names", () => {
+    it("rejects entity name with spaces", () => {
+      const m = validManifest();
+      m.entities[0].name = "My Student";
+      const errors = validate(m);
+      assert.ok(errors.some((e) => e.rule === "valid-identifier" && e.message.includes("My Student")));
+    });
+
+    it("rejects metric name with hyphens", () => {
+      const m = validManifest();
+      m.entities[0].metrics[0].name = "tuition-paid";
+      const errors = validate(m);
+      assert.ok(errors.some((e) => e.rule === "valid-identifier" && e.message.includes("tuition-paid")));
+    });
+
+    it("rejects name starting with a digit", () => {
+      const m = validManifest();
+      m.relationships[0].name = "2Enrollment";
+      const errors = validate(m);
+      assert.ok(errors.some((e) => e.rule === "valid-identifier" && e.message.includes("2Enrollment")));
+    });
+
+    it("rejects table name with special characters", () => {
+      const m = validManifest();
+      m.bft_tables[0].name = "dept/financial";
+      const errors = validate(m);
+      assert.ok(errors.some((e) => e.rule === "valid-identifier" && e.message.includes("dept/financial")));
+    });
+
+    it("accepts underscored and PascalCase names", () => {
+      const errors = validate(validManifest());
+      assert.ok(!errors.some((e) => e.rule === "valid-identifier"));
+    });
+  });
+
   describe("duplicate names", () => {
     it("catches duplicate entity names", () => {
       const m = validManifest();

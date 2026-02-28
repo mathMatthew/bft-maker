@@ -3,10 +3,10 @@
 ## Goal
 Address issues surfaced during the PR #4 code review that weren't blocking merge.
 
-## Status: In Progress
+## Status: Complete
 
 ## Current State
-**19 of 23 items resolved** (1–7, 9, 12–14, 15–22). 93 tests pass.
+**All 24 items resolved.** 98 tests pass.
 
 Key changes so far:
 - Removed `checkSummarizationValidity` — all strategies survive summarization (elimination correction rows sum correctly through GROUP BY)
@@ -16,6 +16,9 @@ Key changes so far:
 - Fixed shared path reference in YAML expansion, removed unused var
 - **Removed `classifyBehavior` and `MetricBehavior` entirely** — strategies now compose as independent pipeline steps instead of being classified into monolithic behavior categories. Fixes the broken elimination + allocation combo case. See item #4 for details.
 - **Fixed multi-hop elimination** — `elimCorrectionBranch` now generates one correction branch per elimination hop (not one per metric). Each hop anchors at home + all prior-hop entities. DuckDB-validated with new `professor_impact` test table (salary: Professor → Class elim → Student elim).
+- Removed hardcoded directory depth from run script — uses `cd "$SCRIPT_DIR"` instead of `cd "$REPO_ROOT"` with `../../..`
+- Unified `baseGrainBranch` into `groupBaseBranch` — eliminated logic duplication
+- Added `valid-identifier` validation rule — rejects names with spaces, hyphens, or other non-identifier characters
 
 ## Issues
 
@@ -42,16 +45,13 @@ Key changes so far:
 
 7. ~~**Unused variable `elimEntityCol`**~~ → **RESOLVED.** Removed.
 
-8. **Run script hardcodes directory depth**
-   `generator.ts` ~line 1003: `REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"` assumes output is exactly 3 levels below repo root.
+8. ~~**Run script hardcodes directory depth**~~ → **RESOLVED.** Removed `REPO_ROOT` assumption; run script now uses `cd "$SCRIPT_DIR"` so it works from any output location.
 
 9. ~~**Missing type re-exports from `codegen/index.ts`**~~ → **RESOLVED.** Added `DimensionStrategy`, `GrainGroup`, `JoinLink` to the re-exports.
 
-10. **`baseGrainBranch` vs `groupBaseBranch` logic duplication**
-    These two functions duplicate significant logic and could be unified.
+10. ~~**`baseGrainBranch` vs `groupBaseBranch` logic duplication**~~ → **RESOLVED.** Deleted `baseGrainBranch`; its call site now constructs a full-grain `GrainGroup` and calls `groupBaseBranch`.
 
-11. **`buildAliasMap` not used consistently across branch functions**
-    `reserveBranch`, `elimCorrectionBranch` still use hardcoded single-char aliases instead of `buildAliasMap`.
+11. ~~**`buildAliasMap` not used consistently across branch functions**~~ → **RESOLVED: N/A.** `reserveBranch` and `elimCorrectionBranch` each SELECT from a single table (raw entity table or materialized `_base` table) with no joins — column references are unqualified, so alias collision is not possible. `buildAliasMap` is only needed in `baseJoinSQL` where multiple tables are joined.
 
 12. ~~**`classifyBehavior` naming**~~ → **RESOLVED: function deleted.** No longer applicable.
 
@@ -75,7 +75,7 @@ Key changes so far:
 
 ### Future
 
-24. **Validator should reject non-identifier characters in names** — entity, relationship, metric, and table names with quotes, spaces, or special chars will cause problems in generated SQL and file paths. Add an early validation rule that restricts names to `[A-Za-z0-9_]`.
+24. ~~**Validator should reject non-identifier characters in names**~~ → **RESOLVED.** Added `valid-identifier` rule that checks all entity, relationship, metric, and table names match `/^[A-Za-z_][A-Za-z0-9_]*$/`. Five tests added.
 
 ### Doc Inconsistencies
 
