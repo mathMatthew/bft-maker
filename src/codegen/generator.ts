@@ -433,7 +433,14 @@ function assemblySQL(
   const sourceTable = hasSummarization ? `${prefix}_summarized` : `${prefix}_weighted`;
 
   // Branch A: base grain rows
-  branches.push(baseGrainBranch(plan, allMetrics, sm, sourceTable));
+  const baseGroup: GrainGroup = {
+    id: "base",
+    grain: plan.bftGrain,
+    joinChain: plan.bftJoinChain,
+    metrics: allMetrics,
+    needsSummarization: hasSummarization,
+  };
+  branches.push(groupBaseBranch(plan, baseGroup, allMetrics, sm, sourceTable, placeholderLabel));
 
   // Placeholder branches for each metric (only when no summarization —
   // summarized tables already have the correct aggregation)
@@ -600,52 +607,6 @@ function groupBaseBranch(
       if (metric.nature === "non-additive") {
         cols.push(`0 AS ${q(metric.name + "_weight")}`);
       }
-    }
-  }
-
-  lines.push(cols.map((c) => `    ${c}`).join(",\n"));
-  lines.push(`FROM ${q(sourceTable)}`);
-  return lines.join("\n");
-}
-
-/**
- * Base grain branch: all real entity columns, metric expressions applied.
- */
-function baseGrainBranch(
-  plan: TablePlan,
-  allMetrics: MetricPlan[],
-  sm: SourceMapping,
-  sourceTable: string
-): string {
-  const hasSummarization = plan.grainGroups.some((g) => g.needsSummarization);
-  const lines: string[] = [`-- Base grain rows`];
-  lines.push("SELECT");
-
-  const cols: string[] = [];
-  for (const entityName of plan.bftGrain) {
-    const es = sm.entities[entityName];
-    cols.push(q(es.idColumn));
-    cols.push(q(entityName.toLowerCase() + "_name"));
-  }
-
-  for (const metric of allMetrics) {
-    if (hasSummarization) {
-      // Summarized table already has the right values
-      cols.push(q(metric.name));
-      if (metric.nature === "non-additive") {
-        cols.push(q(metric.name + "_weight"));
-      }
-    } else if (metric.nature === "non-additive") {
-      cols.push(q(metric.name));
-      cols.push(sumOverSumWeightExpr(metric) + ` AS ${q(metric.name + "_weight")}`);
-    } else if (metric.reserveDimensions.length > 0) {
-      // Reserve dims present: 0 on base rows, separate branches handle value
-      cols.push(`0.0 AS ${q(metric.name)}`);
-    } else {
-      // No reserve dims: metric goes on base rows with allocation weights.
-      // allocationExpr returns "metric * 1.0" when no allocation dims,
-      // "metric * 1.0 / weight" when allocated — handles all cases.
-      cols.push(allocationExpr(metric, sm) + ` AS ${q(metric.name)}`);
     }
   }
 
@@ -935,8 +896,7 @@ function generateRunScript(tableNames: string[]): string {
     `set -euo pipefail`,
     ``,
     `SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"`,
-    `REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"`,
-    `cd "$REPO_ROOT"`,
+    `cd "$SCRIPT_DIR"`,
     ``,
   ];
 

@@ -19,6 +19,7 @@ export function validate(manifest: Manifest): ValidationError[] {
     manifest.relationships.map((r) => r.name)
   );
 
+  checkIdentifierNames(manifest, errors);
   checkDuplicateNames(manifest, errors);
   checkPositiveCardinalities(manifest, errors);
   checkRelationshipEntities(manifest, entityMap, errors);
@@ -31,6 +32,42 @@ export function validate(manifest: Manifest): ValidationError[] {
 
 function buildEntityMap(entities: Entity[]): Map<string, Entity> {
   return new Map(entities.map((e) => [e.name, e]));
+}
+
+const VALID_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+// Rule: All names must be valid SQL identifiers (letters, digits, underscores)
+function checkIdentifierNames(
+  manifest: Manifest,
+  errors: ValidationError[]
+): void {
+  function check(name: string, kind: string, path: string): void {
+    if (!VALID_IDENTIFIER.test(name)) {
+      errors.push({
+        rule: "valid-identifier",
+        message: `${kind} "${name}" has an invalid name: must contain only letters, digits, and underscores, and start with a letter or underscore`,
+        path,
+      });
+    }
+  }
+
+  for (const entity of manifest.entities) {
+    check(entity.name, "Entity", `entities.${entity.name}`);
+    for (const metric of entity.metrics) {
+      check(metric.name, "Metric", `entities.${entity.name}.metrics.${metric.name}`);
+    }
+  }
+  for (const rel of manifest.relationships) {
+    check(rel.name, "Relationship", `relationships.${rel.name}`);
+    if (rel.metrics) {
+      for (const metric of rel.metrics) {
+        check(metric.name, "Metric", `relationships.${rel.name}.metrics.${metric.name}`);
+      }
+    }
+  }
+  for (const table of manifest.bft_tables) {
+    check(table.name, "Table", `bft_tables.${table.name}`);
+  }
 }
 
 // Rule: No duplicate entity names, metric names, relationship names, or table names
