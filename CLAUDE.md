@@ -32,7 +32,6 @@ There is no wizard UI. The "wizard" is an LLM conversation using docs/spec.md as
 
 ## Datasets
 - data/northwind/ — small relational dataset (~2K junction rows) for unit-level testing
-- data/movielens/ — MovieLens dataset (100K+ ratings) for integration testing; downloaded via script, not checked into git
 
 ## Key Concepts
 - **BFT**: Big Flat Table — a single flat table where every numeric column is safe to SUM (or explicitly flagged as requiring Sum/Sum weighted average)
