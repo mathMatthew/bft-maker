@@ -24,9 +24,9 @@ function runSQL(label: string, sqlParts: string[]): Record<string, string>[] {
   writeFileSync(
     pyScript,
     `
-import duckdb, json
+import duckdb, json, sys
 con = duckdb.connect()
-sql = open("${sqlPath}").read()
+sql = open(sys.argv[1]).read()
 results = []
 for stmt in [s.strip() for s in sql.split(';') if s.strip()]:
     lines = [l for l in stmt.split('\\n') if l.strip() and not l.strip().startswith('--')]
@@ -40,9 +40,10 @@ print(json.dumps(results))
 `
   );
   try {
-    const out = execSync(`python3 ${pyScript}`, {
+    const out = execSync(`python3 ${JSON.stringify(pyScript)} ${JSON.stringify(sqlPath)}`, {
       encoding: "utf-8",
       cwd: process.cwd(),
+      maxBuffer: 10 * 1024 * 1024,
     });
     return JSON.parse(out) as Record<string, string>[];
   } finally {

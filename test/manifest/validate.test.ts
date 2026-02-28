@@ -128,6 +128,97 @@ describe("validate", () => {
       const errors = validate(validManifest());
       assert.ok(!errors.some((e) => e.rule === "valid-identifier"));
     });
+
+    it("rejects invalid source_table on entity", () => {
+      const m = validManifest();
+      m.entities[0].source_table = "drop table;";
+      const errors = validate(m);
+      assert.ok(errors.some((e) => e.rule === "valid-identifier" && e.message.includes("source_table")));
+    });
+
+    it("rejects invalid id_column on entity", () => {
+      const m = validManifest();
+      m.entities[0].id_column = "id col";
+      const errors = validate(m);
+      assert.ok(errors.some((e) => e.rule === "valid-identifier" && e.message.includes("id_column")));
+    });
+
+    it("rejects invalid label_column on entity", () => {
+      const m = validManifest();
+      m.entities[0].label_column = "label-col";
+      const errors = validate(m);
+      assert.ok(errors.some((e) => e.rule === "valid-identifier" && e.message.includes("label_column")));
+    });
+
+    it("rejects invalid source_column on metric", () => {
+      const m = validManifest();
+      m.entities[0].metrics[0].source_column = "bad col!";
+      const errors = validate(m);
+      assert.ok(errors.some((e) => e.rule === "valid-identifier" && e.message.includes("source_column")));
+    });
+
+    it("rejects invalid source_table on relationship", () => {
+      const m = validManifest();
+      m.relationships[0].source_table = "1bad";
+      const errors = validate(m);
+      assert.ok(errors.some((e) => e.rule === "valid-identifier" && e.message.includes("source_table")));
+    });
+
+    it("rejects invalid column override on relationship", () => {
+      const m = validManifest();
+      m.relationships[0].columns = { Student: "stu id" };
+      const errors = validate(m);
+      assert.ok(errors.some((e) => e.rule === "valid-identifier" && e.message.includes("column")));
+    });
+
+    it("accepts valid source overrides", () => {
+      const m = validManifest();
+      m.entities[0].source_table = "student_table";
+      m.entities[0].id_column = "studentID";
+      m.entities[0].label_column = "full_name";
+      m.entities[0].metrics[0].source_column = "tuitionPaid";
+      m.relationships[0].source_table = "enrollment_junction";
+      m.relationships[0].columns = { Student: "studentID", Class: "classID" };
+      const errors = validate(m);
+      assert.ok(!errors.some((e) => e.rule === "valid-identifier"));
+    });
+  });
+
+  describe("metric types", () => {
+    it("rejects invalid metric type on entity", () => {
+      const m = validManifest();
+      (m.entities[0].metrics[0] as any).type = "dollars";
+      const errors = validate(m);
+      assert.ok(errors.some((e) => e.rule === "valid-metric-type" && e.message.includes("dollars")));
+    });
+
+    it("rejects invalid metric type on relationship", () => {
+      const m = validManifest();
+      m.relationships[0].metrics = [
+        { name: "grade", type: "letter" as any, nature: "non-additive" },
+      ];
+      const errors = validate(m);
+      assert.ok(errors.some((e) => e.rule === "valid-metric-type" && e.message.includes("letter")));
+    });
+
+    it("accepts all valid metric types", () => {
+      const m = validManifest();
+      m.entities[0].metrics = [
+        { name: "m1", type: "currency", nature: "additive" },
+        { name: "m2", type: "integer", nature: "additive" },
+        { name: "m3", type: "float", nature: "additive" },
+        { name: "m4", type: "rating", nature: "non-additive" },
+        { name: "m5", type: "percentage", nature: "non-additive" },
+        { name: "m6", type: "score", nature: "non-additive" },
+      ];
+      // Update table metrics to match
+      m.bft_tables[0].metrics = ["m1", "m2", "m3", "m4", "m5", "m6", "class_budget", "salary"];
+      m.bft_tables[1].metrics = ["class_budget"];
+      // Remove propagations that reference old metric names
+      m.propagations = m.propagations.filter((p) => p.metric !== "tuition_paid" && p.metric !== "satisfaction_score");
+      const errors = validate(m);
+      assert.ok(!errors.some((e) => e.rule === "valid-metric-type"));
+    });
   });
 
   describe("duplicate names", () => {
