@@ -94,10 +94,6 @@ const fixtures: Fixture[] = [
   },
 ];
 
-// MovieLens excluded from DuckDB integration: no standalone user table
-// exists in the dataset (userId only appears in ratings.csv). The manifest
-// validates correctly and exercises relationship metrics at scale.
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
