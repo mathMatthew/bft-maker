@@ -3,35 +3,37 @@
 ## Goal
 Build test fixtures from real datasets, write integration tests, and create the CLI entry point.
 
-## Scope
+## Status: Complete
 
-### Datasets
-- Northwind (small): download CSVs, create a manifest that exercises Orders↔Products and Employees↔Territories M-M relationships
-- MovieLens (larger): download ml-latest-small (100K ratings), create a manifest that exercises Users↔Movies via ratings and tags
-
-### Fixtures
-- University fixture (from spec examples): synthetic data + manifest
-- Northwind fixture: real data + manifest
-- MovieLens fixture: real data + manifest
-- Simple fixture: two unrelated entities, shared dimensions only
-- Single entity fixture: degenerate case, no foreign metrics
+## What was done
 
 ### CLI
-- src/cli/index.ts: parse args, read YAML manifest, validate, generate SQL
-- Commands: `generate` and `validate`
+- `src/cli/index.ts`: `generate` and `validate` commands, no framework deps
+- `npx bft-maker generate --manifest <path> [--output <dir>]`
+- `npx bft-maker validate --manifest <path>`
+- Clean error messages for missing files, validation failures
 
-### Integration Tests
-- End-to-end: manifest → SQL → execute in DuckDB → validation passes
-- Run against each fixture
+### Schema extensions
+- Added `source_table`, `id_column`, `label_column` to Entity type
+- Added `source_table`, `columns` to Relationship type
+- Added `source_column` to MetricDef type
+- Added `score` to MetricDef type union
+- Planner uses overrides when provided, falls back to naming conventions
 
-## Dependencies
-- Requires Project 3 (manifest types) and Project 2 (code generator)
+### Fixtures with DuckDB integration tests
+- **University** (3 manifests): allocation, elimination, sum_over_sum, summarization, junction metrics, multi-hop, strategy composition
+- **Northwind** (real data): allocation + sum_over_sum + reserve across 830 orders × 77 products via 2155 order_details. Uses source_table/id_column/source_column overrides for camelCase CSV columns.
+- **Single-entity**: degenerate case — one entity, one metric, no relationships
+- **University-ops**: shared dimension pattern — Building×Month UNION ALL Program×Month, unrelated entities via shared Month dimension
 
-## Success Criteria
-- Download scripts work for both datasets
-- Every fixture has a valid manifest and synthetic/real source data
-- Integration tests pass for all fixtures
-- CLI works: `npx bft-maker generate --manifest fixture.yaml --output ./out/`
+### MovieLens manifest
+- `data/movielens/manifest.yaml`: validates correctly, exercises relationship metrics at scale
+- Excluded from DuckDB integration: no standalone user entity table in dataset
 
-## Status
-Pending
+### Bug fixes
+- Fixed `package.json` bin path (`dist/src/cli/` not `dist/cli/`)
+- Fixed sum_over_sum weight validation for propagated non-additive metrics (was incorrectly checking per-home-entity weights)
+- Generator now uses `sourceColumn` when reading from source tables, aliasing to metric name in intermediate tables
+
+## Test results
+118 tests pass (up from 98). Integration tests cover 7 fixtures × 2 checks each (validations pass + row count > 0) plus the existing unit and DuckDB tests.

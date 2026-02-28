@@ -1,8 +1,17 @@
+# Northwind manifest — Order × Product via order_details junction
+#
+# The Northwind CSVs use camelCase column names (orderID, productID, etc.)
+# so we override the default naming conventions with source_table, id_column,
+# label_column, and columns.
+
 entities:
   - name: Order
     role: leaf
     detail: true
     estimated_rows: 830
+    source_table: orders
+    id_column: orderID
+    label_column: shipName
     metrics:
       - name: freight
         type: currency
@@ -12,13 +21,18 @@ entities:
     role: leaf
     detail: true
     estimated_rows: 77
+    source_table: products
+    id_column: productID
+    label_column: productName
     metrics:
       - name: unit_price
         type: currency
         nature: non-additive
+        source_column: unitPrice
       - name: units_in_stock
         type: integer
         nature: additive
+        source_column: unitsInStock
 
 relationships:
   - name: OrderDetails
@@ -26,6 +40,10 @@ relationships:
     type: many-to-many
     estimated_links: 2155
     weight_column: quantity
+    source_table: order_details
+    columns:
+      Order: orderID
+      Product: productID
 
 propagations:
   # freight (Order) allocates to Product through OrderDetails,

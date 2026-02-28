@@ -20,6 +20,7 @@ export function validate(manifest: Manifest): ValidationError[] {
   );
 
   checkIdentifierNames(manifest, errors);
+  checkMetricTypes(manifest, errors);
   checkDuplicateNames(manifest, errors);
   checkPositiveCardinalities(manifest, errors);
   checkRelationshipEntities(manifest, entityMap, errors);
@@ -53,20 +54,76 @@ function checkIdentifierNames(
 
   for (const entity of manifest.entities) {
     check(entity.name, "Entity", `entities.${entity.name}`);
+    if (entity.source_table) {
+      check(entity.source_table, "Entity source_table", `entities.${entity.name}.source_table`);
+    }
+    if (entity.id_column) {
+      check(entity.id_column, "Entity id_column", `entities.${entity.name}.id_column`);
+    }
+    if (entity.label_column) {
+      check(entity.label_column, "Entity label_column", `entities.${entity.name}.label_column`);
+    }
     for (const metric of entity.metrics) {
       check(metric.name, "Metric", `entities.${entity.name}.metrics.${metric.name}`);
+      if (metric.source_column) {
+        check(metric.source_column, "Metric source_column", `entities.${entity.name}.metrics.${metric.name}.source_column`);
+      }
     }
   }
   for (const rel of manifest.relationships) {
     check(rel.name, "Relationship", `relationships.${rel.name}`);
+    if (rel.source_table) {
+      check(rel.source_table, "Relationship source_table", `relationships.${rel.name}.source_table`);
+    }
+    if (rel.columns) {
+      for (const [entityName, colName] of Object.entries(rel.columns)) {
+        check(colName, "Relationship column", `relationships.${rel.name}.columns.${entityName}`);
+      }
+    }
     if (rel.metrics) {
       for (const metric of rel.metrics) {
         check(metric.name, "Metric", `relationships.${rel.name}.metrics.${metric.name}`);
+        if (metric.source_column) {
+          check(metric.source_column, "Metric source_column", `relationships.${rel.name}.metrics.${metric.name}.source_column`);
+        }
       }
     }
   }
   for (const table of manifest.bft_tables) {
     check(table.name, "Table", `bft_tables.${table.name}`);
+  }
+}
+
+const VALID_METRIC_TYPES: ReadonlySet<string> = new Set([
+  "currency", "integer", "float", "rating", "percentage", "score",
+]);
+
+// Rule: All metric type values must be one of the allowed types
+function checkMetricTypes(
+  manifest: Manifest,
+  errors: ValidationError[]
+): void {
+  function check(type: string, metricName: string, path: string): void {
+    if (!VALID_METRIC_TYPES.has(type)) {
+      errors.push({
+        rule: "valid-metric-type",
+        message: `Metric "${metricName}" has invalid type "${type}" — must be one of: ${[...VALID_METRIC_TYPES].join(", ")}`,
+        path,
+      });
+    }
+  }
+
+  for (const entity of manifest.entities) {
+    for (const metric of entity.metrics) {
+      check(metric.type, metric.name, `entities.${entity.name}.metrics.${metric.name}.type`);
+    }
+  }
+  for (const rel of manifest.relationships) {
+    if (rel.metrics) {
+      for (const metric of rel.metrics) {
+        check(metric.type, metric.name, `relationships.${rel.name}.metrics.${metric.name}.type`);
+      }
+    }
   }
 }
 

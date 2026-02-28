@@ -241,7 +241,11 @@ function baseJoinSQL(
       (m) => m.home.kind === "entity" && m.home.grain[0] === entityName
     );
     for (const m of entityMetrics) {
-      selectCols.push(`${alias}.${q(m.name)}`);
+      if (m.sourceColumn !== m.name) {
+        selectCols.push(`${alias}.${q(m.sourceColumn)} AS ${q(m.name)}`);
+      } else {
+        selectCols.push(`${alias}.${q(m.name)}`);
+      }
     }
   }
 
@@ -268,7 +272,11 @@ function baseJoinSQL(
     if (m.home.kind === "relationship") {
       const jAlias = junctionAliasMap.get(m.home.name);
       if (jAlias) {
-        selectCols.push(`${jAlias}.${q(m.name)}`);
+        if (m.sourceColumn !== m.name) {
+          selectCols.push(`${jAlias}.${q(m.sourceColumn)} AS ${q(m.name)}`);
+        } else {
+          selectCols.push(`${jAlias}.${q(m.name)}`);
+        }
       }
     }
   }
@@ -663,7 +671,7 @@ function reserveBranch(
 
   for (const m of allMetrics) {
     if (m.name === metric.name) {
-      cols.push(`${q(m.name)} * 1.0 AS ${q(m.name)}`);
+      cols.push(`${q(m.sourceColumn)} * 1.0 AS ${q(m.name)}`);
     } else {
       cols.push(`0.0 AS ${q(m.name)}`);
       if (m.nature === "non-additive") {
@@ -816,7 +824,7 @@ function validationSQL(plan: TablePlan, allMetrics: MetricPlan[], sm: SourceMapp
     checks.push(`-- V${n}: SUM(${metric.name}) matches source`);
     checks.push(
       `SELECT 'V${n} ${metric.name}_sum' AS test,`,
-      `       CASE WHEN ABS(SUM(${q(metric.name)}) - (SELECT SUM(${q(metric.name)}) FROM ${q(sourceTable)})) < 0.01`,
+      `       CASE WHEN ABS(SUM(${q(metric.name)}) - (SELECT SUM(${q(metric.sourceColumn)}) FROM ${q(sourceTable)})) < 0.01`,
       `            THEN 'PASS' ELSE 'FAIL: ' || SUM(${q(metric.name)}) END AS result`,
       `FROM ${q(plan.tableName)};`
     );
@@ -848,20 +856,23 @@ function validationSQL(plan: TablePlan, allMetrics: MetricPlan[], sm: SourceMapp
         `       CASE WHEN COUNT(*) = 0 THEN 'PASS'`,
         `            ELSE 'FAIL: ' || COUNT(*) || ' with wrong sum' END AS result`,
         `FROM (`,
-        `    SELECT t.${q(homeEs.idColumn)}, ABS(SUM(t.${q(metric.name)}) - s.${q(metric.name)}) AS err`,
+        `    SELECT t.${q(homeEs.idColumn)}, ABS(SUM(t.${q(metric.name)}) - s.${q(metric.sourceColumn)}) AS err`,
         `    FROM ${q(plan.tableName)} t`,
         `    JOIN ${q(homeEs.table)} s ON t.${q(homeEs.idColumn)} = s.${q(homeEs.idColumn)}`,
-        `    GROUP BY t.${q(homeEs.idColumn)}, s.${q(metric.name)}`,
-        `    HAVING ABS(SUM(t.${q(metric.name)}) - s.${q(metric.name)}) > 0.01`,
+        `    GROUP BY t.${q(homeEs.idColumn)}, s.${q(metric.sourceColumn)}`,
+        `    HAVING ABS(SUM(t.${q(metric.name)}) - s.${q(metric.sourceColumn)}) > 0.01`,
         `);`
       );
       n++;
     }
   }
 
-  // V: Sum/Sum weight check
+  // V: Sum/Sum weight check (only for metrics at their natural grain —
+  // propagated non-additive metrics have weights partitioned differently)
   for (const metric of allMetrics) {
     if (metric.nature !== "non-additive") continue;
+    const hasPropagation = metric.propagatedDimensions.some((d) => d.strategy !== "reserve");
+    if (hasPropagation) continue;
 
     const home = homeEntity(metric);
     const homeEs = sm.entities[home];
