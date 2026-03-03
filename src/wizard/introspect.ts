@@ -25,11 +25,26 @@ function closeDatabase(db: duckdb.Database): Promise<void> {
   });
 }
 
+/**
+ * Convert BigInt values to Number in query results.
+ * DuckDB returns BigInt for BIGINT/HUGEINT columns, which can't be JSON.stringify'd.
+ */
+function coerceBigInts(rows: Record<string, unknown>[]): Record<string, unknown>[] {
+  for (const row of rows) {
+    for (const key of Object.keys(row)) {
+      if (typeof row[key] === "bigint") {
+        row[key] = Number(row[key]);
+      }
+    }
+  }
+  return rows;
+}
+
 function query(db: duckdb.Database, sql: string): Promise<Record<string, unknown>[]> {
   return new Promise((resolve, reject) => {
     db.all(sql, (err: Error | null, rows: Record<string, unknown>[]) => {
       if (err) reject(err);
-      else resolve(rows);
+      else resolve(coerceBigInts(rows));
     });
   });
 }
@@ -89,7 +104,7 @@ export interface DetectedModel {
   /** All FK references found. */
   allFKs: FKRef[];
   /** Metric candidates: numeric non-PK non-FK columns. */
-  metrics: { table: string; column: string; type: string }[];
+  metrics: { table: string; column: string; type: string; nature?: "additive" | "non-additive" }[];
 }
 
 /* ------------------------------------------------------------------ */
@@ -317,14 +332,41 @@ export function detectRole(
 /*  Metric detection                                                  */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Guess whether a metric is additive or non-additive from its column name.
+ *
+ * Non-additive signals:
+ * - "per" as a word boundary (cost_per_unit, revenuePerStudent) → rate
+ * - rate, ratio, pct, percent, avg, average, score, rating, grade → non-additive
+ *
+ * Additive signals:
+ * - count, qty, quantity, amount, total, revenue, cost, sum, num → additive
+ *
+ * Fallback: additive (most metrics are summable).
+ */
+export function guessMetricNature(colName: string): "additive" | "non-additive" {
+  // Split into words: camelCase → split on case boundaries, then snake_case on _
+  const words = colName
+    .replace(/([a-z])([A-Z])/g, "$1_$2")
+    .toLowerCase()
+    .split("_");
+
+  const NON_ADDITIVE = ["per", "rate", "ratio", "pct", "percent", "avg", "average", "score", "rating", "grade"];
+  for (const w of words) {
+    if (NON_ADDITIVE.includes(w)) return "non-additive";
+  }
+
+  return "additive";
+}
+
 function detectMetrics(
   tables: TableInfo[],
   fks: FKRef[],
-): { table: string; column: string; type: string }[] {
+): { table: string; column: string; type: string; nature?: "additive" | "non-additive" }[] {
   // Columns to exclude: PKs, FK columns, and anything that looks like an ID
   const fkCols = new Set(fks.map((fk) => `${fk.fromTable}.${fk.fromColumn}`));
 
-  const metrics: { table: string; column: string; type: string }[] = [];
+  const metrics: { table: string; column: string; type: string; nature?: "additive" | "non-additive" }[] = [];
 
   for (const table of tables) {
     for (const col of table.columns) {
@@ -333,7 +375,12 @@ function detectMetrics(
       if (fkCols.has(`${table.name}.${col.name}`)) continue;
       // Exclude columns that look like IDs even if we couldn't match them
       if (looksLikeId(col.name)) continue;
-      metrics.push({ table: table.name, column: col.name, type: col.type });
+      metrics.push({
+        table: table.name,
+        column: col.name,
+        type: col.type,
+        nature: guessMetricNature(col.name),
+      });
     }
   }
 
@@ -352,6 +399,53 @@ export function inferMetricType(
     return "float";
   }
   return "integer";
+}
+
+/* ------------------------------------------------------------------ */
+/*  Sample row queries                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Query sample rows from a table for preview.
+ * Opens a read-only connection, fetches, and closes.
+ */
+export async function querySampleRows(
+  dbPath: string,
+  tableName: string,
+  limit: number,
+): Promise<Record<string, unknown>[]> {
+  const db = await openDatabase(dbPath, { access_mode: "READ_ONLY" });
+  try {
+    return await query(db, `SELECT * FROM "${tableName}" LIMIT ${limit}`);
+  } finally {
+    await closeDatabase(db);
+  }
+}
+
+/**
+ * Query N distinct values per column (uncorrelated).
+ * Returns a map from column name to array of distinct values.
+ */
+export async function queryDistinctValues(
+  dbPath: string,
+  tableName: string,
+  columns: string[],
+  limit: number,
+): Promise<Map<string, unknown[]>> {
+  const db = await openDatabase(dbPath, { access_mode: "READ_ONLY" });
+  try {
+    const result = new Map<string, unknown[]>();
+    for (const col of columns) {
+      const rows = await query(
+        db,
+        `SELECT DISTINCT "${col}" AS v FROM "${tableName}" WHERE "${col}" IS NOT NULL ORDER BY "${col}" LIMIT ${limit}`,
+      );
+      result.set(col, rows.map((r) => r.v));
+    }
+    return result;
+  } finally {
+    await closeDatabase(db);
+  }
 }
 
 /* ------------------------------------------------------------------ */

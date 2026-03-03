@@ -8,7 +8,8 @@ import {
   allMetricDefs,
   type WizardState,
 } from "./state.js";
-import { runDataModelStep } from "./steps/data-model.js";
+import { runDataModelStep, type DataModelResult } from "./steps/data-model.js";
+import type { DetectedModel } from "./introspect.js";
 import { runStrategyMatrixStep } from "./steps/strategy-matrix.js";
 import { runWeightsStep } from "./steps/weights.js";
 import { runTablesStep } from "./steps/tables.js";
@@ -44,14 +45,18 @@ export async function runWizard(opts: WizardOptions): Promise<void> {
 
   let state = createInitialState();
   let hasDataModel = false;
+  let savedDetectedModel: DetectedModel | undefined;
 
   const draft = loadDraft(opts.dbPath);
   if (draft) {
     const ago = timeSince(draft.savedAt);
+    const hint = draft.state.entities.length > 0
+      ? statusSummary(draft.state)
+      : "data model in progress";
     const resume = await clack.select({
       message: `Found saved progress from ${ago}. Resume?`,
       options: [
-        { value: "resume", label: "Resume", hint: statusSummary(draft.state) },
+        { value: "resume", label: "Resume", hint },
         { value: "fresh", label: "Start fresh" },
       ],
     });
@@ -64,6 +69,7 @@ export async function runWizard(opts: WizardOptions): Promise<void> {
 
     if (resume === "resume") {
       state = draft.state;
+      savedDetectedModel = draft.detectedModel;
       hasDataModel = state.entities.length > 0;
     } else {
       deleteDraft(opts.dbPath);
@@ -73,14 +79,15 @@ export async function runWizard(opts: WizardOptions): Promise<void> {
   // ── Step 1: Data model (required first time) ────────────────
 
   if (!hasDataModel) {
-    const ok = await runDataModelStep(state, opts.dbPath);
-    if (!ok || cancelled) {
+    const result = await runDataModelStep(state, opts.dbPath, savedDetectedModel);
+    savedDetectedModel = result.model;
+    if (!result.ok || cancelled) {
       cleanup();
-      saveOnQuit(opts.dbPath, state);
+      saveOnQuit(opts.dbPath, state, savedDetectedModel);
       return;
     }
     hasDataModel = true;
-    saveDraft(opts.dbPath, state, "strategy-matrix");
+    saveDraft(opts.dbPath, state, "strategy-matrix", savedDetectedModel);
   }
 
   // ── Hub menu ────────────────────────────────────────────────
@@ -88,7 +95,7 @@ export async function runWizard(opts: WizardOptions): Promise<void> {
   while (true) {
     if (cancelled) {
       cleanup();
-      saveOnQuit(opts.dbPath, state);
+      saveOnQuit(opts.dbPath, state, savedDetectedModel);
       return;
     }
 
@@ -96,7 +103,7 @@ export async function runWizard(opts: WizardOptions): Promise<void> {
 
     if (clack.isCancel(choice) || choice === "quit") {
       cleanup();
-      saveOnQuit(opts.dbPath, state);
+      saveOnQuit(opts.dbPath, state, savedDetectedModel);
       return;
     }
 
@@ -107,7 +114,7 @@ export async function runWizard(opts: WizardOptions): Promise<void> {
     let ok = true;
 
     switch (choice) {
-      case "data-model":
+      case "data-model": {
         // Re-run data model — reset downstream state
         state.entities = [];
         state.relationships = [];
@@ -116,8 +123,11 @@ export async function runWizard(opts: WizardOptions): Promise<void> {
         state.entityNames = [];
         state.weights = new Map();
         state.bftTables = [];
-        ok = await runDataModelStep(state, opts.dbPath);
+        const result = await runDataModelStep(state, opts.dbPath, savedDetectedModel);
+        savedDetectedModel = result.model;
+        ok = result.ok;
         break;
+      }
 
       case "strategy-matrix":
         ok = await runStrategyMatrixStep(state);
@@ -136,12 +146,12 @@ export async function runWizard(opts: WizardOptions): Promise<void> {
 
     if (!ok || cancelled) {
       cleanup();
-      saveOnQuit(opts.dbPath, state);
+      saveOnQuit(opts.dbPath, state, savedDetectedModel);
       return;
     }
 
     // Save progress after each step
-    saveDraft(opts.dbPath, state, "hub");
+    saveDraft(opts.dbPath, state, "hub", savedDetectedModel);
   }
 
   cleanup();
@@ -275,9 +285,9 @@ async function showHubMenu(state: WizardState): Promise<HubChoice | symbol> {
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
 
-function saveOnQuit(dbPath: string, state: WizardState): void {
-  if (state.entities.length > 0 || state.relationships.length > 0) {
-    saveDraft(dbPath, state, "hub");
+function saveOnQuit(dbPath: string, state: WizardState, model?: DetectedModel): void {
+  if (state.entities.length > 0 || state.relationships.length > 0 || model) {
+    saveDraft(dbPath, state, "hub", model);
     clack.log.info("Progress saved. Run the wizard again to resume.");
   }
   clack.outro("Wizard cancelled.");

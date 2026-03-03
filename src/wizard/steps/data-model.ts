@@ -7,6 +7,8 @@ import {
   introspect,
   detectRole,
   inferMetricType,
+  querySampleRows,
+  queryDistinctValues,
   type ColumnInfo,
   type DetectedModel,
   type DetectedRelationship,
@@ -27,59 +29,111 @@ function truncate(v: unknown, width: number): string {
 }
 
 /**
- * Render a transposed table preview on the alternate screen.
- * Columns go down, sample rows go across as numbered columns.
- * Groups columns into chunks that fit the terminal height.
- * Waits for any keypress to return.
+ * Format a column classification tag for display, padded to `width` visible chars.
  */
-function showTablePreview(table: TableInfo): Promise<void> {
+function classificationTag(
+  model: DetectedModel,
+  tableName: string,
+  col: ColumnInfo,
+  pk: string | null,
+  width: number,
+): string {
+  const desig = getColumnDesignation(model, tableName, col, pk);
+  if (!desig) return chalk.dim("attr".padEnd(width));
+  if (desig === "key") return chalk.yellow("key".padEnd(width));
+  if (desig === "additive") return chalk.green("additive".padEnd(width));
+  if (desig === "non-additive") return chalk.magenta("non-addit.".padEnd(width));
+  if (desig === "metric") return chalk.green("metric?".padEnd(width));
+  // FK reference like "~ orders"
+  return chalk.cyan(truncate(desig, width).padEnd(width));
+}
+
+type PreviewMode = "rows" | "distinct";
+
+interface PreviewData {
+  mode: PreviewMode;
+  count: number;
+  /** Correlated sample rows (mode === "rows"). */
+  sampleRows?: Record<string, unknown>[];
+  /** Per-column distinct values (mode === "distinct"). */
+  distinctValues?: Map<string, unknown[]>;
+}
+
+type PreviewAction = "quit" | "count" | "mode" | "edit";
+
+/**
+ * Render the preview grid content (no alternate screen enter/exit — caller manages that).
+ */
+function renderPreviewGrid(
+  table: TableInfo,
+  model: DetectedModel,
+  data: PreviewData,
+): void {
   const out = process.stdout;
-  const input = process.stdin as NodeJS.ReadStream;
   const termCols = (out as NodeJS.WriteStream).columns ?? 80;
   const termRows = (out as NodeJS.WriteStream).rows ?? 24;
-  const numSamples = table.sampleRows.length;
 
-  out.write(ansiEscapes.enterAlternativeScreen);
+  // Determine max number of value columns to display
+  let numValueCols: number;
+  if (data.mode === "rows") {
+    numValueCols = data.sampleRows!.length;
+  } else {
+    numValueCols = 0;
+    for (const vals of data.distinctValues!.values()) {
+      numValueCols = Math.max(numValueCols, vals.length);
+    }
+  }
+
   out.write(ansiEscapes.cursorTo(0, 0));
+  out.write(ansiEscapes.eraseScreen);
 
   // Title
+  const modeLabel = data.mode === "rows"
+    ? `first ${numValueCols} rows`
+    : `${data.count} distinct values per column`;
   out.write(
     chalk.bold(table.name) +
-    chalk.dim(` — ${table.rowCount} rows, showing first ${numSamples}`) +
+    chalk.dim(` — ${table.rowCount} rows, ${modeLabel}`) +
     "\n",
   );
 
-  if (numSamples === 0) {
+  if (numValueCols === 0) {
     out.write(chalk.dim("\n  (no data)\n"));
   } else {
     const colNames = table.columns.map((c) => c.name);
-    const colTypes = table.columns.map((c) => c.type);
 
-    // Label width = longest column name + type tag
+    // Build classification tags for width calculation
+    const tags = table.columns.map((c) =>
+      getColumnDesignation(model, table.name, c, table.pk) || "attr",
+    );
+    const maxTagLen = Math.max(...tags.map((t) => t.length));
+
+    // Label width = longest column name
     const labelWidth = Math.min(
       Math.max(...colNames.map((n) => n.length)) + 1,
       24,
     );
+    const tagWidth = Math.min(maxTagLen + 1, 12);
 
-    // Value cell width = divide remaining space among sample columns
-    const gap = 2; // space between value cells
-    const available = termCols - labelWidth - 3; // 3 for left margin + separator
+    // Value cell width = divide remaining space among value columns
+    const gap = 2;
+    const available = termCols - labelWidth - tagWidth - 5;
     const cellWidth = Math.max(
       6,
-      Math.min(14, Math.floor((available - gap * numSamples) / numSamples)),
+      Math.min(14, Math.floor((available - gap * numValueCols) / numValueCols)),
     );
 
-    // Row number header
-    const rowNums = Array.from({ length: numSamples }, (_, i) =>
+    // Column number header
+    const colNums = Array.from({ length: numValueCols }, (_, i) =>
       chalk.dim(String(i + 1).padStart(cellWidth)),
     ).join("  ");
-    out.write(`\n  ${"".padEnd(labelWidth)}  ${rowNums}\n`);
+    const headerPad = "".padEnd(labelWidth + tagWidth + 2);
+    out.write(`\n  ${headerPad}${colNums}\n`);
     out.write(
-      `  ${"".padEnd(labelWidth)}  ${chalk.dim("─".repeat(numSamples * (cellWidth + gap) - gap))}\n`,
+      `  ${headerPad}${chalk.dim("─".repeat(numValueCols * (cellWidth + gap) - gap))}\n`,
     );
 
     // Chunk columns into groups that fit the terminal height
-    // Reserve lines for: title(1) + header(2) + footer(2) + chunk separator(1)
     const linesPerChunk = termRows - 6;
     const chunks: number[][] = [];
     for (let i = 0; i < colNames.length; i += linesPerChunk) {
@@ -93,38 +147,122 @@ function showTablePreview(table: TableInfo): Promise<void> {
 
     for (let ci = 0; ci < chunks.length; ci++) {
       if (ci > 0) {
-        // For subsequent chunks, clear and redraw header
-        out.write(`\n  ${"".padEnd(labelWidth)}  ${rowNums}\n`);
+        out.write(`\n  ${headerPad}${colNums}\n`);
         out.write(
-          `  ${"".padEnd(labelWidth)}  ${chalk.dim("─".repeat(numSamples * (cellWidth + gap) - gap))}\n`,
+          `  ${headerPad}${chalk.dim("─".repeat(numValueCols * (cellWidth + gap) - gap))}\n`,
         );
       }
 
       for (const colIdx of chunks[ci]) {
-        const name = colNames[colIdx];
-        const type = colTypes[colIdx];
-        const isPK = name === table.pk;
+        const col = table.columns[colIdx];
+        const name = col.name;
 
-        // Label: column name with type hint
-        let label = name;
-        if (isPK) label += chalk.yellow("*");
-        label = truncate(label, labelWidth).padEnd(labelWidth);
+        const label = truncate(name, labelWidth).padEnd(labelWidth);
+        const tag = classificationTag(model, table.name, col, table.pk, tagWidth);
 
-        // Values
-        const values = table.sampleRows
-          .map((row) => {
-            const v = truncate(row[name], cellWidth);
-            return v.padStart(cellWidth);
-          })
-          .join("  ");
+        // Values — either from correlated rows or distinct per-column
+        let values: string;
+        if (data.mode === "rows") {
+          values = data.sampleRows!
+            .map((row) => truncate(row[name], cellWidth).padStart(cellWidth))
+            .join("  ");
+        } else {
+          const colVals = data.distinctValues!.get(name) ?? [];
+          values = Array.from({ length: numValueCols }, (_, i) =>
+            truncate(i < colVals.length ? colVals[i] : "", cellWidth).padStart(cellWidth),
+          ).join("  ");
+        }
 
-        const typeHint = chalk.dim(` ${type}`);
-        out.write(`  ${label}  ${values}${typeHint}\n`);
+        out.write(`  ${label}  ${tag}  ${values}\n`);
       }
     }
   }
 
-  out.write(chalk.dim("\n  Press any key to return.  * = primary key\n"));
+  // Footer with keybindings
+  const toggleLabel = data.mode === "rows" ? "distinct values" : "first rows";
+  out.write(
+    chalk.dim(`\n  r`) + chalk.dim(` change count  `) +
+    chalk.dim(`d`) + chalk.dim(` ${toggleLabel}  `) +
+    chalk.dim(`e`) + chalk.dim(` edit  `) +
+    chalk.dim(`q/esc`) + chalk.dim(` back\n`),
+  );
+}
+
+/**
+ * Read a number from the user inline on the alternate screen.
+ * Shows a prompt at the bottom, reads digits, enter to confirm, esc to cancel.
+ */
+function readNumberInline(prompt: string, current: number): Promise<number | null> {
+  const out = process.stdout;
+  const input = process.stdin as NodeJS.ReadStream;
+  let buf = "";
+
+  out.write(ansiEscapes.eraseLine + ansiEscapes.cursorTo(0));
+  out.write(`  ${prompt} (current: ${current}): `);
+  out.write(ansiEscapes.cursorShow);
+
+  return new Promise((resolve) => {
+    const wasRaw = input.isRaw ?? false;
+    if (typeof input.setRawMode === "function") input.setRawMode(true);
+    input.resume();
+
+    function onData(chunk: Buffer): void {
+      const key = chunk.toString();
+
+      // Esc or Ctrl-C → cancel
+      if (key === "\x1b" || key === "\x03") {
+        cleanup();
+        resolve(null);
+        return;
+      }
+
+      // Enter → confirm
+      if (key === "\r" || key === "\n") {
+        cleanup();
+        const n = parseInt(buf, 10);
+        resolve(isNaN(n) || n < 1 ? null : n);
+        return;
+      }
+
+      // Backspace
+      if (key === "\x7f" || key === "\b") {
+        if (buf.length > 0) {
+          buf = buf.slice(0, -1);
+          out.write("\b \b");
+        }
+        return;
+      }
+
+      // Digit
+      if (/^\d$/.test(key)) {
+        buf += key;
+        out.write(key);
+      }
+    }
+
+    function cleanup(): void {
+      input.removeListener("data", onData);
+      if (typeof input.setRawMode === "function") input.setRawMode(wasRaw);
+      out.write(ansiEscapes.cursorHide);
+    }
+
+    input.on("data", onData);
+  });
+}
+
+/**
+ * Show the table preview on the alternate screen.
+ * Returns the user's action: quit, change count, or toggle mode.
+ */
+function showTablePreview(
+  table: TableInfo,
+  model: DetectedModel,
+  data: PreviewData,
+): Promise<PreviewAction> {
+  const out = process.stdout;
+  const input = process.stdin as NodeJS.ReadStream;
+
+  renderPreviewGrid(table, model, data);
   out.write(ansiEscapes.cursorHide);
 
   return new Promise((resolve) => {
@@ -132,12 +270,29 @@ function showTablePreview(table: TableInfo): Promise<void> {
     if (typeof input.setRawMode === "function") input.setRawMode(true);
     input.resume();
 
-    function onKey(): void {
+    function onKey(chunk: Buffer): void {
+      const key = chunk.toString().toLowerCase();
+
+      if (key === "q" || key === "\x1b" || key === "\x03") {
+        cleanup();
+        resolve("quit");
+      } else if (key === "r") {
+        cleanup();
+        resolve("count");
+      } else if (key === "d") {
+        cleanup();
+        resolve("mode");
+      } else if (key === "e") {
+        cleanup();
+        resolve("edit");
+      }
+      // Ignore other keys
+    }
+
+    function cleanup(): void {
       input.removeListener("data", onKey);
       if (typeof input.setRawMode === "function") input.setRawMode(wasRaw);
       out.write(ansiEscapes.cursorShow);
-      out.write(ansiEscapes.exitAlternativeScreen);
-      resolve();
     }
 
     input.on("data", onKey);
@@ -226,9 +381,10 @@ function getColumnDesignation(
     return `~ ${fk.toTable}${suffix}`;
   }
 
-  // Metric
-  if (model.metrics.some((m) => m.table === tableName && m.column === col.name)) {
-    return "metric";
+  // Metric — show nature if classified
+  const metric = model.metrics.find((m) => m.table === tableName && m.column === col.name);
+  if (metric) {
+    return metric.nature ?? "metric";
   }
 
   return "";
@@ -271,19 +427,25 @@ function showTableDetail(model: DetectedModel, table: TableInfo): void {
 
 /**
  * Edit columns within a single table.
+ * If targetTable is provided, skip the table selection prompt.
  */
-async function editTableDetails(model: DetectedModel): Promise<boolean> {
-  const allTables = [...model.entities, ...model.junctions, ...model.unclassified];
+async function editTableDetails(model: DetectedModel, targetTable?: string): Promise<boolean> {
+  let tableName: string | symbol;
+  if (targetTable) {
+    tableName = targetTable;
+  } else {
+    const allTables = [...model.entities, ...model.junctions, ...model.unclassified];
 
-  const tableName = await clack.select({
-    message: "Which table to view/edit?",
-    options: allTables.map((t) => ({
-      value: t.name,
-      label: t.name,
-      hint: `${t.rowCount} rows`,
-    })),
-  });
-  if (clack.isCancel(tableName)) return true;
+    tableName = await clack.select({
+      message: "Which table to view/edit?",
+      options: allTables.map((t) => ({
+        value: t.name,
+        label: t.name,
+        hint: `${t.rowCount} rows`,
+      })),
+    });
+    if (clack.isCancel(tableName)) return true;
+  }
 
   const table = model.tables.find((t) => t.name === tableName)!;
 
@@ -344,16 +506,33 @@ async function editTableDetails(model: DetectedModel): Promise<boolean> {
         clack.log.success(`${col.name} → key`);
         break;
 
-      case "metric":
-        if (!model.metrics.some((m) => m.table === table.name && m.column === col.name)) {
-          model.metrics.push({ table: table.name, column: col.name, type: col.type });
-        }
+      case "metric": {
+        const nature = await clack.select({
+          message: `Is ${col.name} additive (summable)?`,
+          options: [
+            { value: "additive", label: "Yes — additive", hint: "revenue, headcount" },
+            { value: "non-additive", label: "No — non-additive", hint: "rating, percentage" },
+          ],
+        });
+        if (clack.isCancel(nature)) continue;
+
+        // Remove existing entry if any, then add with nature
+        model.metrics = model.metrics.filter(
+          (m) => !(m.table === table.name && m.column === col.name),
+        );
+        model.metrics.push({
+          table: table.name,
+          column: col.name,
+          type: col.type,
+          nature: nature as "additive" | "non-additive",
+        });
         model.allFKs = model.allFKs.filter(
           (f) => !(f.fromTable === table.name && f.fromColumn === col.name),
         );
         if (table.pk === col.name) table.pk = null;
-        clack.log.success(`${col.name} → metric`);
+        clack.log.success(`${col.name} → ${nature}`);
         break;
+      }
 
       case "connect": {
         const targetTables = model.tables.filter((t) => t.name !== table.name);
@@ -412,6 +591,43 @@ async function editTableDetails(model: DetectedModel): Promise<boolean> {
     // Rebuild derived data after any change
     rebuildDerivedData(model);
   }
+}
+
+/**
+ * Ask the user to classify a single metric as additive/non-additive/skip.
+ * Returns null on cancel.
+ */
+async function askMetricNature(
+  m: { table: string; column: string; type: string; nature?: "additive" | "non-additive" },
+  model: DetectedModel,
+): Promise<boolean | null> {
+  const table = model.tables.find((t) => t.name === m.table);
+  const samples = table?.sampleRows
+    .map((row) => row[m.column])
+    .filter((v) => v != null)
+    .slice(0, 5) ?? [];
+  const sampleHint = samples.length > 0
+    ? ` (samples: ${samples.join(", ")})`
+    : "";
+
+  const current = m.nature;
+  const nature = await clack.select({
+    message: `${m.table}.${m.column}${sampleHint}`,
+    options: [
+      { value: "additive", label: "Additive", hint: "revenue, headcount" },
+      { value: "non-additive", label: "Non-additive", hint: "rating, percentage, per-unit" },
+      { value: "skip", label: "Not a metric — remove" },
+    ],
+    initialValue: current ?? "additive",
+  });
+  if (clack.isCancel(nature)) return null;
+
+  if (nature === "skip") {
+    m.nature = undefined;
+  } else {
+    m.nature = nature as "additive" | "non-additive";
+  }
+  return true;
 }
 
 /**
@@ -482,7 +698,8 @@ async function reclassifyTable(model: DetectedModel): Promise<boolean> {
   model.unclassified = model.unclassified.filter((t) => t.name !== tableName);
 
   if (newClass === "exclude") {
-    model.tables = model.tables.filter((t) => t.name !== tableName);
+    // Remove from classification arrays but keep in model.tables
+    // so the table can be re-included via the table selection prompt.
     model.allFKs = model.allFKs.filter(
       (fk) => fk.fromTable !== tableName && fk.toTable !== tableName,
     );
@@ -504,7 +721,26 @@ async function reclassifyTable(model: DetectedModel): Promise<boolean> {
 /*  Preview table                                                     */
 /* ------------------------------------------------------------------ */
 
-async function previewTable(model: DetectedModel): Promise<boolean> {
+/** Track user's preferred preview settings across previews in a session. */
+let previewRowCount = 5;
+let previewMode: PreviewMode = "rows";
+
+async function loadPreviewData(
+  dbPath: string,
+  table: TableInfo,
+  mode: PreviewMode,
+  count: number,
+): Promise<PreviewData> {
+  if (mode === "distinct") {
+    const colNames = table.columns.map((c) => c.name);
+    const distinctValues = await queryDistinctValues(dbPath, table.name, colNames, count);
+    return { mode, count, distinctValues };
+  }
+  const sampleRows = await querySampleRows(dbPath, table.name, count);
+  return { mode, count, sampleRows };
+}
+
+async function previewTable(model: DetectedModel, dbPath: string): Promise<boolean> {
   const allTables = [...model.entities, ...model.junctions, ...model.unclassified];
 
   const tableName = await clack.select({
@@ -518,7 +754,45 @@ async function previewTable(model: DetectedModel): Promise<boolean> {
   if (clack.isCancel(tableName)) return true;
 
   const table = model.tables.find((t) => t.name === tableName)!;
-  await showTablePreview(table);
+  const out = process.stdout;
+
+  let currentCount = previewRowCount;
+  let currentMode = previewMode;
+
+  out.write(ansiEscapes.enterAlternativeScreen);
+
+  try {
+    while (true) {
+      const data = await loadPreviewData(dbPath, table, currentMode, currentCount);
+      const action = await showTablePreview(table, model, data);
+
+      if (action === "quit") break;
+
+      if (action === "mode") {
+        currentMode = currentMode === "rows" ? "distinct" : "rows";
+        previewMode = currentMode;
+        continue;
+      }
+
+      if (action === "count") {
+        const n = await readNumberInline("How many", currentCount);
+        if (n != null) {
+          currentCount = n;
+          previewRowCount = n;
+        }
+        continue;
+      }
+
+      if (action === "edit") {
+        // Leave alt screen for clack prompts, edit, then come back
+        out.write(ansiEscapes.exitAlternativeScreen);
+        await editTableDetails(model, table.name);
+        out.write(ansiEscapes.enterAlternativeScreen);
+      }
+    }
+  } finally {
+    out.write(ansiEscapes.exitAlternativeScreen);
+  }
 
   return true;
 }
@@ -527,7 +801,7 @@ async function previewTable(model: DetectedModel): Promise<boolean> {
 /*  Edit loop                                                         */
 /* ------------------------------------------------------------------ */
 
-async function editLoop(model: DetectedModel): Promise<boolean> {
+async function editLoop(model: DetectedModel, dbPath: string): Promise<boolean> {
   while (true) {
     showModel(model);
 
@@ -547,7 +821,7 @@ async function editLoop(model: DetectedModel): Promise<boolean> {
       case "done":
         return true;
       case "preview":
-        if (!(await previewTable(model))) return false;
+        if (!(await previewTable(model, dbPath))) return false;
         break;
       case "detail":
         if (!(await editTableDetails(model))) return false;
@@ -563,116 +837,167 @@ async function editLoop(model: DetectedModel): Promise<boolean> {
 /*  Step 1 runner                                                     */
 /* ------------------------------------------------------------------ */
 
+export interface DataModelResult {
+  ok: boolean;
+  /** The detected model, available for draft saving even on cancel. */
+  model?: DetectedModel;
+}
+
 export async function runDataModelStep(
   state: WizardState,
   dbPath: string,
-): Promise<boolean> {
+  savedModel?: DetectedModel,
+): Promise<DataModelResult> {
   clack.log.step("Step 1: Discover your data model");
 
-  const s = clack.spinner();
-  s.start("Analyzing database schema...");
-
   let model: DetectedModel;
-  try {
-    model = await introspect(dbPath);
-  } catch (err) {
-    s.stop("Failed to read database");
-    clack.log.error(err instanceof Error ? err.message : String(err));
-    return false;
+
+  if (savedModel) {
+    model = savedModel;
+    clack.log.info(
+      `Resuming: ${model.tables.length} tables — ` +
+      `${model.entities.length} entities, ` +
+      `${model.relationships.length} relationships, ` +
+      `${model.metrics.length} metrics`,
+    );
+  } else {
+    const s = clack.spinner();
+    s.start("Analyzing database schema...");
+
+    try {
+      model = await introspect(dbPath);
+    } catch (err) {
+      s.stop("Failed to read database");
+      clack.log.error(err instanceof Error ? err.message : String(err));
+      return { ok: false };
+    }
+
+    s.stop(
+      `Found ${model.tables.length} tables — ` +
+      `${model.entities.length} entities, ` +
+      `${model.relationships.length} relationships, ` +
+      `${model.metrics.length} metrics detected`,
+    );
   }
 
-  s.stop(
-    `Found ${model.tables.length} tables — ` +
-    `${model.entities.length} entities, ` +
-    `${model.relationships.length} relationships, ` +
-    `${model.metrics.length} metrics detected`,
-  );
-
   // Table selection (default: all included)
+  // Shown on first run and on resume — the user can always change which tables are included.
   if (model.tables.length > 0) {
+    const currentlyIncluded = new Set([
+      ...model.entities.map((t) => t.name),
+      ...model.junctions.map((t) => t.name),
+      ...model.unclassified.map((t) => t.name),
+    ]);
+
     const include = await clack.multiselect({
-      message: "Which tables to include? (all selected by default)",
+      message: "Which tables to include?",
       options: model.tables.map((t) => ({
         value: t.name,
         label: t.name,
         hint: `${t.rowCount} rows, ${t.columns.length} cols`,
       })),
-      initialValues: model.tables.map((t) => t.name),
+      initialValues: model.tables
+        .filter((t) => currentlyIncluded.has(t.name))
+        .map((t) => t.name),
     });
 
-    if (clack.isCancel(include)) return false;
+    if (clack.isCancel(include)) return { ok: false, model };
     const included = new Set(include as string[]);
 
-    // Remove excluded tables from the model
-    if (included.size < model.tables.length) {
-      model.tables = model.tables.filter((t) => included.has(t.name));
-      model.entities = model.entities.filter((t) => included.has(t.name));
-      model.junctions = model.junctions.filter((t) => included.has(t.name));
-      model.unclassified = model.unclassified.filter((t) => included.has(t.name));
-      model.relationships = model.relationships.filter(
-        (r) =>
-          included.has(r.junctionTable) &&
-          included.has(r.entity1) &&
-          included.has(r.entity2),
-      );
-      model.directFKs = model.directFKs.filter(
-        (fk) => included.has(fk.fromTable) && included.has(fk.toTable),
-      );
-      model.metrics = model.metrics.filter((m) => included.has(m.table));
+    // Rebuild classification arrays from table selection
+    model.entities = model.entities.filter((t) => included.has(t.name));
+    model.junctions = model.junctions.filter((t) => included.has(t.name));
+    model.unclassified = model.unclassified.filter((t) => included.has(t.name));
+    model.relationships = model.relationships.filter(
+      (r) =>
+        included.has(r.junctionTable) &&
+        included.has(r.entity1) &&
+        included.has(r.entity2),
+    );
+    model.directFKs = model.directFKs.filter(
+      (fk) => included.has(fk.fromTable) && included.has(fk.toTable),
+    );
+    model.metrics = model.metrics.filter((m) => included.has(m.table));
+
+    // Tables that were excluded but re-included need a classification
+    for (const t of model.tables) {
+      if (!included.has(t.name)) continue;
+      const isClassified =
+        model.entities.some((e) => e.name === t.name) ||
+        model.junctions.some((j) => j.name === t.name) ||
+        model.unclassified.some((u) => u.name === t.name);
+      if (!isClassified) {
+        model.unclassified.push(t);
+      }
     }
   }
 
   // Review and edit
-  if (!(await editLoop(model))) return false;
+  if (!(await editLoop(model, dbPath))) return { ok: false, model };
 
   // Validation
   if (model.entities.length === 0) {
     clack.log.error("No entities in the model. Need at least one.");
-    return false;
+    return { ok: false, model };
   }
 
   // ── Build state from the confirmed model ──────────────────
 
-  // Ask additive/non-additive for each metric
+  // Show metric classifications and let user accept or walk through
   const metricDefs: Map<string, MetricDef[]> = new Map();
 
   if (model.metrics.length > 0) {
-    clack.log.message("");
-    clack.log.step("Metric details");
+    const unclassified = model.metrics.filter((m) => !m.nature);
+    const classified = model.metrics.filter((m) => m.nature);
 
-    for (const m of model.metrics) {
-      // Show sample values to help the user decide
-      const table = model.tables.find((t) => t.name === m.table);
-      const samples = table?.sampleRows
-        .map((row) => row[m.column])
-        .filter((v) => v != null)
-        .slice(0, 5) ?? [];
-      const sampleHint = samples.length > 0
-        ? ` (samples: ${samples.join(", ")})`
-        : "";
+    if (unclassified.length > 0) {
+      // Some metrics have no guess — must walk through those
+      clack.log.message("");
+      clack.log.step("Unclassified metrics");
+      for (const m of unclassified) {
+        const result = await askMetricNature(m, model);
+        if (result === null) return { ok: false, model };
+      }
+    }
 
-      const nature = await clack.select({
-        message: `Is ${m.table}.${m.column} additive?${sampleHint}`,
+    if (classified.length > 0) {
+      // Show auto-classifications and offer review
+      clack.log.message("");
+      clack.log.step("Metric classifications");
+      for (const m of classified) {
+        const tag = m.nature === "additive" ? "additive" : "non-additive";
+        clack.log.message(`  ${m.table}.${m.column} → ${tag}`);
+      }
+
+      const review = await clack.select({
+        message: `${classified.length} metrics auto-classified. Review?`,
         options: [
-          { value: "additive", label: "Yes — additive", hint: "revenue, headcount" },
-          { value: "non-additive", label: "No — non-additive", hint: "rating, percentage" },
-          { value: "skip", label: "Not a metric — remove" },
+          { value: "accept", label: "Looks good" },
+          { value: "walk", label: "Walk me through each one" },
         ],
       });
-      if (clack.isCancel(nature)) return false;
+      if (clack.isCancel(review)) return { ok: false, model };
 
-      if (nature === "skip") continue;
-
-      const def: MetricDef = {
-        name: m.column,
-        type: inferMetricType(m.type),
-        nature: nature as MetricDef["nature"],
-      };
-
-      const existing = metricDefs.get(m.table) ?? [];
-      existing.push(def);
-      metricDefs.set(m.table, existing);
+      if (review === "walk") {
+        for (const m of classified) {
+          const result = await askMetricNature(m, model);
+          if (result === null) return { ok: false, model };
+        }
+      }
     }
+  }
+
+  // Remove skipped metrics (nature cleared) and build metricDefs
+  model.metrics = model.metrics.filter((m) => m.nature);
+  for (const m of model.metrics) {
+    const def: MetricDef = {
+      name: m.column,
+      type: inferMetricType(m.type),
+      nature: m.nature!,
+    };
+    const existing = metricDefs.get(m.table) ?? [];
+    existing.push(def);
+    metricDefs.set(m.table, existing);
   }
 
   // Build entities
@@ -711,5 +1036,5 @@ export async function runDataModelStep(
   );
   clack.log.message("");
 
-  return true;
+  return { ok: true, model };
 }

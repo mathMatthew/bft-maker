@@ -57,7 +57,7 @@ src/wizard/
 ## Design Decisions
 - **TUI, not web UI** — fits the developer tool nature of bft-maker
 - **Directed relationship graph** — direction defined in data model, matrix shows reachability
-- **Sample data, not full queries** — 5 rows loaded during introspection for preview. Row counts from actual data; no surprise queries against large tables.
+- **Sample data, not full queries** — rows loaded on demand for preview (user-configurable count). Row counts from actual data; no surprise queries against large tables.
 - **Hub menu over linear wizard** — after the data model step, user can jump to any section. Progress saved as drafts.
 - **`q` to quit everywhere** — clack alias maps `q` → cancel in select/multiselect; grid uses `q` natively
 
@@ -75,9 +75,18 @@ Implementation in progress on `feat/p5-tui-wizard`. Core wizard functional, manu
 - Strategy matrix + table preview on alternate screen buffers
 - `q` to quit, SIGINT handler, "Not a metric" option, sample values in prompts
 - Save/load draft with hub menu for non-linear navigation
+- Session 2 committed: hub menu, draft persistence, data model preview
+- **Preview screen** (session 3):
+  - Column classifications shown: key (yellow), additive (green), non-additive (magenta), metric? (green, unclassified), FK (cyan), attr (dim)
+  - Inline keybindings: `r` change row count (any number), `d` toggle first-rows/distinct-values, `e` edit table, `q`/esc back
+  - Row count and mode persist across previews in session
+  - Distinct values mode: uncorrelated per-column `SELECT DISTINCT` values
+- **Inline metric classification**: additive/non-additive asked when setting a column as metric in edit (no separate pass needed; end-of-step pass only asks about remaining unclassified)
+- **Draft saves detected model**: introspection results saved so resume skips re-introspecting; table selection re-shown on resume so nothing is locked in
+- **Audit: everything reachable on resume** — table inclusion, classification, column roles, metric nature, strategy matrix, weights, tables. Excluded tables kept in model.tables for re-inclusion.
 - 187 tests passing
 
 ### Remaining
-- [ ] Commit session 2 improvements
+- [ ] Commit session 3 improvements (preview, inline metrics, draft model save)
 - [ ] Manual testing with Northwind (wide matrix)
 - [ ] PR

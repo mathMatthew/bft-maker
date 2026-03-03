@@ -71,6 +71,8 @@ describe("wizard end-to-end (db-driven)", { skip: !tmuxAvailable() }, () => {
       killSession(session);
       session = null;
     }
+    // Clean up draft file between tests
+    try { fs.unlinkSync(testDbPath + ".bft-draft.json"); } catch { /* ignore */ }
   });
 
   it("auto-detects model and produces valid YAML", async () => {
@@ -95,23 +97,11 @@ describe("wizard end-to-end (db-driven)", { skip: !tmuxAvailable() }, () => {
     await waitForText(session, "Looks good");
     sendKeys(session, "Enter");   // "Looks good, continue"
 
-    // ── Metric nature questions ───────────────────────────────
+    // ── Metric classifications (auto-detected) ────────────────
 
-    // unit_price: additive?
-    await waitForText(session, "additive", 10000);
-    sendKeys(session, "Enter");   // Yes
-
-    // units_sold: additive?
-    await waitForText(session, "additive");
-    sendKeys(session, "Enter");   // Yes
-
-    // budget: additive?
-    await waitForText(session, "additive");
-    sendKeys(session, "Enter");   // Yes
-
-    // quantity (junction metric on sales): additive?
-    await waitForText(session, "additive");
-    sendKeys(session, "Enter");   // Yes
+    // All metrics auto-classified as additive, accept them
+    await waitForText(session, "auto-classified", 10000);
+    sendKeys(session, "Enter");   // "Looks good"
 
     // ── Hub: select Strategy matrix ─────────────────────────────
 
@@ -252,16 +242,11 @@ describe("wizard end-to-end (db-driven)", { skip: !tmuxAvailable() }, () => {
     await waitForText(session, "Looks good");
     sendKeys(session, "Enter");   // "Looks good, continue"
 
-    // ── Metric nature: unit_price, budget, and quantity (junction) ──
+    // ── Metric classifications (auto-detected) ────────────────
 
-    await waitForText(session, "additive", 10000);
-    sendKeys(session, "Enter");   // unit_price: Yes
-
-    await waitForText(session, "additive");
-    sendKeys(session, "Enter");   // budget: Yes
-
-    await waitForText(session, "additive");
-    sendKeys(session, "Enter");   // quantity (junction): Yes
+    // 3 metrics auto-classified as additive (unit_price, budget, quantity), accept
+    await waitForText(session, "auto-classified", 10000);
+    sendKeys(session, "Enter");   // "Looks good"
 
     // ── Hub: select Strategy matrix ─────────────────────────────
 

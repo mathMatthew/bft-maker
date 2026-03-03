@@ -2,6 +2,13 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { WizardState, WizardStep, GridCell } from "./state.js";
 import type { Entity, Relationship, MetricDef, BftTable } from "../manifest/types.js";
+import type {
+  DetectedModel,
+  TableInfo,
+  ColumnInfo,
+  FKRef,
+  DetectedRelationship,
+} from "./introspect.js";
 
 /* ------------------------------------------------------------------ */
 /*  Draft file format                                                  */
@@ -18,6 +25,15 @@ interface SerializedState {
   bftTables: BftTable[];
 }
 
+interface SerializedDetectedModel {
+  tables: TableInfo[];
+  entityNames: string[];
+  junctionNames: string[];
+  unclassifiedNames: string[];
+  allFKs: FKRef[];
+  metrics: { table: string; column: string; type: string; nature?: "additive" | "non-additive" }[];
+}
+
 interface DraftFile {
   /** Absolute path to the database file. */
   dbPath: string;
@@ -27,6 +43,8 @@ interface DraftFile {
   resumeStep: WizardStep | "hub";
   /** Serialized wizard state. */
   state: SerializedState;
+  /** Saved introspection results so we can skip re-introspecting on resume. */
+  detectedModel?: SerializedDetectedModel;
 }
 
 /* ------------------------------------------------------------------ */
@@ -46,6 +64,7 @@ export function saveDraft(
   dbPath: string,
   state: WizardState,
   resumeStep: WizardStep | "hub",
+  model?: DetectedModel,
 ): void {
   const draft: DraftFile = {
     dbPath: path.resolve(dbPath),
@@ -63,6 +82,17 @@ export function saveDraft(
     },
   };
 
+  if (model) {
+    draft.detectedModel = {
+      tables: model.tables,
+      entityNames: model.entities.map((t) => t.name),
+      junctionNames: model.junctions.map((t) => t.name),
+      unclassifiedNames: model.unclassified.map((t) => t.name),
+      allFKs: model.allFKs,
+      metrics: model.metrics,
+    };
+  }
+
   fs.writeFileSync(draftPath(dbPath), JSON.stringify(draft, null, 2));
 }
 
@@ -74,6 +104,7 @@ export interface LoadedDraft {
   resumeStep: WizardStep | "hub";
   savedAt: string;
   state: WizardState;
+  detectedModel?: DetectedModel;
 }
 
 export function loadDraft(dbPath: string): LoadedDraft | null {
@@ -97,10 +128,52 @@ export function loadDraft(dbPath: string): LoadedDraft | null {
       bftTables: raw.state.bftTables,
     };
 
+    // Rebuild DetectedModel from saved data — re-link table references
+    let detectedModel: DetectedModel | undefined;
+    if (raw.detectedModel) {
+      const dm = raw.detectedModel;
+      const tableByName = new Map(dm.tables.map((t) => [t.name, t]));
+      const entities = dm.entityNames.map((n) => tableByName.get(n)!).filter(Boolean);
+      const junctions = dm.junctionNames.map((n) => tableByName.get(n)!).filter(Boolean);
+      const unclassified = dm.unclassifiedNames.map((n) => tableByName.get(n)!).filter(Boolean);
+
+      // Rebuild directFKs and relationships from allFKs + classifications
+      const entityNameSet = new Set(dm.entityNames);
+      const directFKs = dm.allFKs.filter(
+        (fk) => entityNameSet.has(fk.fromTable) && entityNameSet.has(fk.toTable),
+      );
+      const relationships: DetectedRelationship[] = [];
+      for (const jt of junctions) {
+        const jtFKs = dm.allFKs.filter((fk) => fk.fromTable === jt.name);
+        if (jtFKs.length >= 2) {
+          relationships.push({
+            junctionTable: jt.name,
+            entity1: jtFKs[0].toTable,
+            entity2: jtFKs[1].toTable,
+            fk1Column: jtFKs[0].fromColumn,
+            fk2Column: jtFKs[1].fromColumn,
+            rowCount: jt.rowCount,
+          });
+        }
+      }
+
+      detectedModel = {
+        tables: dm.tables,
+        entities,
+        junctions,
+        unclassified,
+        relationships,
+        directFKs,
+        allFKs: dm.allFKs,
+        metrics: dm.metrics,
+      };
+    }
+
     return {
       resumeStep: raw.resumeStep,
       savedAt: raw.savedAt,
       state,
+      detectedModel,
     };
   } catch {
     return null;
