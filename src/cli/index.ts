@@ -4,40 +4,50 @@ import * as path from "node:path";
 import * as process from "node:process";
 import { loadManifest, validate } from "../manifest/index.js";
 import { generate, emitFiles } from "../codegen/index.js";
+import { runWizard } from "../wizard/index.js";
 
 function usage(): never {
   console.error(`Usage:
   bft-maker generate --manifest <path> [--output <dir>]
-  bft-maker validate --manifest <path>`);
+  bft-maker validate --manifest <path>
+  bft-maker wizard --db <duckdb-path> [--output <path>]`);
   process.exit(1);
 }
 
-function parseArgs(argv: string[]): { command: string; manifest: string; output: string } {
+function parseArgs(argv: string[]): { command: string; manifest: string; output: string; db: string } {
   const args = argv.slice(2);
   const command = args[0];
-  if (!command || !["generate", "validate"].includes(command)) {
+  if (!command || !["generate", "validate", "wizard"].includes(command)) {
     usage();
   }
 
   let manifest = "";
   let output = "./out";
+  let db = "";
   for (let i = 1; i < args.length; i++) {
     if (args[i] === "--manifest" && args[i + 1]) {
       manifest = args[++i];
     } else if (args[i] === "--output" && args[i + 1]) {
       output = args[++i];
+    } else if (args[i] === "--db" && args[i + 1]) {
+      db = args[++i];
     } else {
       console.error(`Unknown argument: ${args[i]}`);
       usage();
     }
   }
 
-  if (!manifest) {
+  if (command !== "wizard" && !manifest) {
     console.error("Error: --manifest is required");
     usage();
   }
 
-  return { command, manifest, output };
+  if (command === "wizard" && !db) {
+    console.error("Error: --db is required for wizard");
+    usage();
+  }
+
+  return { command, manifest, output, db };
 }
 
 function runValidate(manifestPath: string): void {
@@ -95,15 +105,19 @@ function runGenerate(manifestPath: string, outputDir: string): void {
   }
 }
 
-try {
-  const { command, manifest, output } = parseArgs(process.argv);
-  if (command === "validate") {
+async function main(): Promise<void> {
+  const { command, manifest, output, db } = parseArgs(process.argv);
+  if (command === "wizard") {
+    await runWizard({ dbPath: db, outputPath: output !== "./out" ? output : undefined });
+  } else if (command === "validate") {
     runValidate(manifest);
   } else {
     runGenerate(manifest, output);
   }
-} catch (err: unknown) {
+}
+
+main().catch((err: unknown) => {
   const msg = err instanceof Error ? err.message : String(err);
   console.error(`Error: ${msg}`);
   process.exit(1);
-}
+});
