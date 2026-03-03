@@ -1,4 +1,5 @@
 import * as clack from "@clack/prompts";
+import { settings } from "@clack/core";
 import type { WizardState } from "../state.js";
 import { cellsNeedingWeights } from "../state.js";
 
@@ -23,6 +24,8 @@ export async function runWeightsStep(state: WizardState): Promise<boolean> {
   for (const cell of cells) {
     const strategyLabel = cell.value === "allocation" ? "allocation" : "sum/sum";
 
+    // Disable q→cancel alias so user can type 'q' in text input
+    settings.aliases.delete("q");
     const weight = await clack.text({
       message: `Weight column for ${cell.metricName} → ${cell.entityName} (${strategyLabel})`,
       placeholder: "e.g. enrollment_share, credit_hours",
@@ -34,6 +37,7 @@ export async function runWeightsStep(state: WizardState): Promise<boolean> {
         return undefined;
       },
     });
+    settings.aliases.set("q", "cancel");
 
     if (clack.isCancel(weight)) return false;
 

@@ -51,6 +51,8 @@ export interface TableInfo {
   columns: ColumnInfo[];
   /** Detected primary key column (unique, typically *_id or id). */
   pk: string | null;
+  /** First few rows of data for preview. */
+  sampleRows: Record<string, unknown>[];
 }
 
 /** A detected FK: column in `fromTable` references PK of `toTable`. */
@@ -106,13 +108,64 @@ function isNumericType(duckdbType: string): boolean {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Naming helpers                                                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Extract the stem from an ID-like column name.
+ * Handles: snake_case (`customer_id`), camelCase (`customerID`, `customerId`)
+ * Returns lowercase stem or null if not an ID pattern.
+ */
+function extractIdStem(colName: string): string | null {
+  const lower = colName.toLowerCase();
+
+  // snake_case: customer_id → customer
+  if (lower.endsWith("_id")) {
+    return lower.replace(/_id$/, "");
+  }
+
+  // camelCase: customerID → customer, customerId → customer
+  // Match when the name ends with "Id" or "ID" (but not the whole name)
+  if (colName.length > 2 && /(?:Id|ID)$/.test(colName)) {
+    return colName.replace(/(?:Id|ID)$/, "").toLowerCase();
+  }
+
+  return null;
+}
+
+/**
+ * Check if a stem matches a table name, accounting for pluralization.
+ */
+function stemMatchesTable(stem: string, tableName: string): boolean {
+  const tbl = tableName.toLowerCase();
+  return (
+    tbl === stem ||
+    tbl === stem + "s" ||
+    tbl === stem + "es" ||
+    tbl === stem.replace(/y$/, "ies") ||
+    // Also match singular table to plural stem and vice versa
+    stem === tbl + "s" ||
+    stem === tbl + "es"
+  );
+}
+
+/**
+ * Returns true if a column name looks like an ID/key column,
+ * even if we can't match it to a specific table.
+ */
+function looksLikeId(colName: string): boolean {
+  const lower = colName.toLowerCase();
+  return lower === "id" || lower.endsWith("_id") || /(?:Id|ID)$/.test(colName);
+}
+
+/* ------------------------------------------------------------------ */
 /*  PK detection                                                      */
 /* ------------------------------------------------------------------ */
 
 /**
  * Detect the primary key column for a table.
- * Priority: column named `id`, column named `tablename_id`,
- * then any unique integer column that's first.
+ * Priority: column named `id`/`ID`, column named after the table
+ * (snake or camelCase), then first unique ID-like column.
  */
 function detectPK(table: TableInfo): string | null {
   const { name, columns, rowCount } = table;
@@ -121,27 +174,23 @@ function detectPK(table: TableInfo): string | null {
   // Unique columns (already computed during introspect)
   const uniqueCols = columns.filter((c) => c.isUnique);
 
-  // Priority 1: column named exactly "id"
+  // Priority 1: column named exactly "id" or "ID"
   const idCol = uniqueCols.find((c) => c.name.toLowerCase() === "id");
   if (idCol) return idCol.name;
 
-  // Priority 2: column named tablename_id (singular or plural stem)
-  const tblLower = name.toLowerCase();
+  // Priority 2: column named after the table (any casing convention)
   for (const col of uniqueCols) {
-    const colLower = col.name.toLowerCase();
-    if (!colLower.endsWith("_id")) continue;
-    const stem = colLower.replace(/_id$/, "");
-    if (
-      tblLower === stem ||
-      tblLower === stem + "s" ||
-      tblLower === stem + "es" ||
-      tblLower === stem.replace(/y$/, "ies")
-    ) {
+    const stem = extractIdStem(col.name);
+    if (stem && stemMatchesTable(stem, name)) {
       return col.name;
     }
   }
 
-  // Priority 3: first unique integer column
+  // Priority 3: first unique column whose name looks like an ID
+  const firstIdLike = uniqueCols.find((c) => looksLikeId(c.name));
+  if (firstIdLike) return firstIdLike.name;
+
+  // Priority 4: first unique integer column
   const firstUniqueInt = uniqueCols.find((c) => c.isNumeric);
   if (firstUniqueInt) return firstUniqueInt.name;
 
@@ -153,8 +202,10 @@ function detectPK(table: TableInfo): string | null {
 /* ------------------------------------------------------------------ */
 
 /**
- * Match _id columns to PKs in other tables.
- * Uses name matching: column `foo_id` matches table `foo` or `foos`.
+ * Match ID-like columns to PKs in other tables.
+ * Handles both snake_case (customer_id) and camelCase (customerID).
+ * Does NOT skip PK columns — a column can be both a table's PK and
+ * a FK to another table (common in junction tables with composite keys).
  */
 function detectFKs(tables: TableInfo[]): FKRef[] {
   const pkByTable = new Map<string, string>();
@@ -166,26 +217,14 @@ function detectFKs(tables: TableInfo[]): FKRef[] {
 
   for (const table of tables) {
     for (const col of table.columns) {
-      const colLower = col.name.toLowerCase();
-      if (!colLower.endsWith("_id")) continue;
-
-      // Skip if this is the table's own PK
-      if (col.name === table.pk) continue;
-
-      const stem = colLower.replace(/_id$/, "");
+      const stem = extractIdStem(col.name);
+      if (!stem) continue;
 
       // Try to match to another table's PK
       for (const [otherTable, otherPK] of pkByTable) {
         if (otherTable === table.name) continue;
-        const otherLower = otherTable.toLowerCase();
 
-        // Match stem to table name: student → students, class → classes, etc.
-        if (
-          otherLower === stem ||
-          otherLower === stem + "s" ||
-          otherLower === stem + "es" ||
-          otherLower === stem.replace(/y$/, "ies")
-        ) {
+        if (stemMatchesTable(stem, otherTable)) {
           refs.push({
             fromTable: table.name,
             fromColumn: col.name,
@@ -207,17 +246,23 @@ function detectFKs(tables: TableInfo[]): FKRef[] {
 
 /**
  * Classify tables as entities, junctions, or unclassified.
- * A junction table has 2+ FK references to entity PKs and typically
- * no PK of its own (or its PK is composite).
+ *
+ * Junction: has 2+ FK columns AND does not have its own independent PK
+ * (i.e., the PK is either absent or is itself a FK to another table).
+ * Examples: order_details (orderID+productID), employee_territories.
+ *
+ * Entity: has its own non-FK PK, even if it also has FK columns.
+ * Examples: orders (orderID is its own PK, not a FK), products.
  */
 function classifyTables(
   tables: TableInfo[],
   fks: FKRef[],
 ): { entities: TableInfo[]; junctions: TableInfo[]; unclassified: TableInfo[] } {
-  // Count outgoing FKs per table
-  const fkCountByTable = new Map<string, number>();
+  // FK columns per table
+  const fksByTable = new Map<string, Set<string>>();
   for (const fk of fks) {
-    fkCountByTable.set(fk.fromTable, (fkCountByTable.get(fk.fromTable) ?? 0) + 1);
+    if (!fksByTable.has(fk.fromTable)) fksByTable.set(fk.fromTable, new Set());
+    fksByTable.get(fk.fromTable)!.add(fk.fromColumn);
   }
 
   const entities: TableInfo[] = [];
@@ -225,16 +270,19 @@ function classifyTables(
   const unclassified: TableInfo[] = [];
 
   for (const table of tables) {
-    const fkCount = fkCountByTable.get(table.name) ?? 0;
+    const fkCols = fksByTable.get(table.name);
+    const fkCount = fkCols?.size ?? 0;
 
-    if (fkCount >= 2) {
-      // 2+ FKs out → junction table
+    // A junction has 2+ FKs and no independent PK
+    // (PK is absent, or PK is one of the FK columns)
+    const pkIsFK = table.pk != null && (fkCols?.has(table.pk) ?? false);
+    const hasOwnPK = table.pk != null && !pkIsFK;
+
+    if (fkCount >= 2 && !hasOwnPK) {
+      // Pure join table — clear the PK since it's composite
+      table.pk = null;
       junctions.push(table);
-    } else if (table.pk) {
-      // Has a PK → entity
-      entities.push(table);
-    } else if (fkCount === 0) {
-      // No PK, no FKs → entity (just no detected PK)
+    } else if (table.pk || fkCount === 0) {
       entities.push(table);
     } else {
       unclassified.push(table);
@@ -273,7 +321,7 @@ function detectMetrics(
   tables: TableInfo[],
   fks: FKRef[],
 ): { table: string; column: string; type: string }[] {
-  // Columns to exclude: PKs and FK columns
+  // Columns to exclude: PKs, FK columns, and anything that looks like an ID
   const fkCols = new Set(fks.map((fk) => `${fk.fromTable}.${fk.fromColumn}`));
 
   const metrics: { table: string; column: string; type: string }[] = [];
@@ -283,6 +331,8 @@ function detectMetrics(
       if (!col.isNumeric) continue;
       if (col.name === table.pk) continue;
       if (fkCols.has(`${table.name}.${col.name}`)) continue;
+      // Exclude columns that look like IDs even if we couldn't match them
+      if (looksLikeId(col.name)) continue;
       metrics.push({ table: table.name, column: col.name, type: col.type });
     }
   }
@@ -358,7 +408,10 @@ export async function introspect(dbPath: string): Promise<DetectedModel> {
         });
       }
 
-      tables.push({ name: tableName, rowCount, columns, pk: null });
+      // Load sample rows for preview
+      const sampleRows = await query(db, `SELECT * FROM "${tableName}" LIMIT 5`);
+
+      tables.push({ name: tableName, rowCount, columns, pk: null, sampleRows });
     }
 
     // Detect PKs
@@ -394,8 +447,9 @@ export async function introspect(dbPath: string): Promise<DetectedModel> {
       (fk) => entityNames.has(fk.fromTable) && entityNames.has(fk.toTable),
     );
 
-    // Detect metrics
-    const metrics = detectMetrics(entities, allFKs);
+    // Detect metrics on all tables (junction tables like order_details
+    // often carry the most important metrics: quantity, price, etc.)
+    const metrics = detectMetrics(tables, allFKs);
 
     return {
       tables,

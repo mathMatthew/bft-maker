@@ -1,4 +1,6 @@
 import * as clack from "@clack/prompts";
+import ansiEscapes from "ansi-escapes";
+import chalk from "chalk";
 import type { Entity, Relationship, MetricDef } from "../../manifest/types.js";
 import type { WizardState } from "../state.js";
 import {
@@ -14,6 +16,133 @@ import {
 /* ------------------------------------------------------------------ */
 /*  Display helpers                                                   */
 /* ------------------------------------------------------------------ */
+
+/**
+ * Truncate a string to width, adding ellipsis if needed.
+ */
+function truncate(v: unknown, width: number): string {
+  const s = v == null ? "" : String(v);
+  if (s.length > width) return s.slice(0, width - 1) + "…";
+  return s;
+}
+
+/**
+ * Render a transposed table preview on the alternate screen.
+ * Columns go down, sample rows go across as numbered columns.
+ * Groups columns into chunks that fit the terminal height.
+ * Waits for any keypress to return.
+ */
+function showTablePreview(table: TableInfo): Promise<void> {
+  const out = process.stdout;
+  const input = process.stdin as NodeJS.ReadStream;
+  const termCols = (out as NodeJS.WriteStream).columns ?? 80;
+  const termRows = (out as NodeJS.WriteStream).rows ?? 24;
+  const numSamples = table.sampleRows.length;
+
+  out.write(ansiEscapes.enterAlternativeScreen);
+  out.write(ansiEscapes.cursorTo(0, 0));
+
+  // Title
+  out.write(
+    chalk.bold(table.name) +
+    chalk.dim(` — ${table.rowCount} rows, showing first ${numSamples}`) +
+    "\n",
+  );
+
+  if (numSamples === 0) {
+    out.write(chalk.dim("\n  (no data)\n"));
+  } else {
+    const colNames = table.columns.map((c) => c.name);
+    const colTypes = table.columns.map((c) => c.type);
+
+    // Label width = longest column name + type tag
+    const labelWidth = Math.min(
+      Math.max(...colNames.map((n) => n.length)) + 1,
+      24,
+    );
+
+    // Value cell width = divide remaining space among sample columns
+    const gap = 2; // space between value cells
+    const available = termCols - labelWidth - 3; // 3 for left margin + separator
+    const cellWidth = Math.max(
+      6,
+      Math.min(14, Math.floor((available - gap * numSamples) / numSamples)),
+    );
+
+    // Row number header
+    const rowNums = Array.from({ length: numSamples }, (_, i) =>
+      chalk.dim(String(i + 1).padStart(cellWidth)),
+    ).join("  ");
+    out.write(`\n  ${"".padEnd(labelWidth)}  ${rowNums}\n`);
+    out.write(
+      `  ${"".padEnd(labelWidth)}  ${chalk.dim("─".repeat(numSamples * (cellWidth + gap) - gap))}\n`,
+    );
+
+    // Chunk columns into groups that fit the terminal height
+    // Reserve lines for: title(1) + header(2) + footer(2) + chunk separator(1)
+    const linesPerChunk = termRows - 6;
+    const chunks: number[][] = [];
+    for (let i = 0; i < colNames.length; i += linesPerChunk) {
+      chunks.push(
+        Array.from(
+          { length: Math.min(linesPerChunk, colNames.length - i) },
+          (_, j) => i + j,
+        ),
+      );
+    }
+
+    for (let ci = 0; ci < chunks.length; ci++) {
+      if (ci > 0) {
+        // For subsequent chunks, clear and redraw header
+        out.write(`\n  ${"".padEnd(labelWidth)}  ${rowNums}\n`);
+        out.write(
+          `  ${"".padEnd(labelWidth)}  ${chalk.dim("─".repeat(numSamples * (cellWidth + gap) - gap))}\n`,
+        );
+      }
+
+      for (const colIdx of chunks[ci]) {
+        const name = colNames[colIdx];
+        const type = colTypes[colIdx];
+        const isPK = name === table.pk;
+
+        // Label: column name with type hint
+        let label = name;
+        if (isPK) label += chalk.yellow("*");
+        label = truncate(label, labelWidth).padEnd(labelWidth);
+
+        // Values
+        const values = table.sampleRows
+          .map((row) => {
+            const v = truncate(row[name], cellWidth);
+            return v.padStart(cellWidth);
+          })
+          .join("  ");
+
+        const typeHint = chalk.dim(` ${type}`);
+        out.write(`  ${label}  ${values}${typeHint}\n`);
+      }
+    }
+  }
+
+  out.write(chalk.dim("\n  Press any key to return.  * = primary key\n"));
+  out.write(ansiEscapes.cursorHide);
+
+  return new Promise((resolve) => {
+    const wasRaw = input.isRaw ?? false;
+    if (typeof input.setRawMode === "function") input.setRawMode(true);
+    input.resume();
+
+    function onKey(): void {
+      input.removeListener("data", onKey);
+      if (typeof input.setRawMode === "function") input.setRawMode(wasRaw);
+      out.write(ansiEscapes.cursorShow);
+      out.write(ansiEscapes.exitAlternativeScreen);
+      resolve();
+    }
+
+    input.on("data", onKey);
+  });
+}
 
 function showModel(model: DetectedModel): void {
   clack.log.message("");
@@ -39,8 +168,14 @@ function showModel(model: DetectedModel): void {
     clack.log.message("");
     clack.log.step("Relationships");
     for (const r of model.relationships) {
+      const junctionMetrics = model.metrics
+        .filter((m) => m.table === r.junctionTable)
+        .map((m) => m.column);
       clack.log.message(`  ${r.entity1} ↔ ${r.entity2}`);
       clack.log.message(`    via ${r.junctionTable} (${r.rowCount} links)`);
+      if (junctionMetrics.length > 0) {
+        clack.log.message(`    metrics: ${junctionMetrics.join(", ")}`);
+      }
     }
   }
 
@@ -366,6 +501,29 @@ async function reclassifyTable(model: DetectedModel): Promise<boolean> {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Preview table                                                     */
+/* ------------------------------------------------------------------ */
+
+async function previewTable(model: DetectedModel): Promise<boolean> {
+  const allTables = [...model.entities, ...model.junctions, ...model.unclassified];
+
+  const tableName = await clack.select({
+    message: "Which table to preview?",
+    options: allTables.map((t) => ({
+      value: t.name,
+      label: t.name,
+      hint: `${t.rowCount} rows`,
+    })),
+  });
+  if (clack.isCancel(tableName)) return true;
+
+  const table = model.tables.find((t) => t.name === tableName)!;
+  await showTablePreview(table);
+
+  return true;
+}
+
+/* ------------------------------------------------------------------ */
 /*  Edit loop                                                         */
 /* ------------------------------------------------------------------ */
 
@@ -379,6 +537,7 @@ async function editLoop(model: DetectedModel): Promise<boolean> {
         { value: "done", label: "Looks good, continue" },
         { value: "detail", label: "Edit table details", hint: "columns & connections" },
         { value: "reclassify", label: "Reclassify a table", hint: "entity / junction / exclude" },
+        { value: "preview", label: "Preview a table", hint: "see sample rows" },
       ],
     });
 
@@ -387,6 +546,9 @@ async function editLoop(model: DetectedModel): Promise<boolean> {
     switch (action) {
       case "done":
         return true;
+      case "preview":
+        if (!(await previewTable(model))) return false;
+        break;
       case "detail":
         if (!(await editTableDetails(model))) return false;
         break;
@@ -479,14 +641,27 @@ export async function runDataModelStep(
     clack.log.step("Metric details");
 
     for (const m of model.metrics) {
+      // Show sample values to help the user decide
+      const table = model.tables.find((t) => t.name === m.table);
+      const samples = table?.sampleRows
+        .map((row) => row[m.column])
+        .filter((v) => v != null)
+        .slice(0, 5) ?? [];
+      const sampleHint = samples.length > 0
+        ? ` (samples: ${samples.join(", ")})`
+        : "";
+
       const nature = await clack.select({
-        message: `Is ${m.table}.${m.column} additive? (Can you SUM it?)`,
+        message: `Is ${m.table}.${m.column} additive?${sampleHint}`,
         options: [
           { value: "additive", label: "Yes — additive", hint: "revenue, headcount" },
           { value: "non-additive", label: "No — non-additive", hint: "rating, percentage" },
+          { value: "skip", label: "Not a metric — remove" },
         ],
       });
       if (clack.isCancel(nature)) return false;
+
+      if (nature === "skip") continue;
 
       const def: MetricDef = {
         name: m.column,
@@ -513,7 +688,7 @@ export async function runDataModelStep(
     });
   }
 
-  // Build relationships
+  // Build relationships (with junction table metrics)
   for (const rel of model.relationships) {
     state.relationships.push({
       name: rel.junctionTable,
@@ -521,12 +696,14 @@ export async function runDataModelStep(
       type: "many-to-many",
       estimated_links: rel.rowCount,
       source_table: rel.junctionTable,
+      metrics: metricDefs.get(rel.junctionTable),
     });
   }
 
   // Summary
   clack.log.message("");
-  const totalMetrics = state.entities.reduce((n, e) => n + e.metrics.length, 0);
+  const relMetrics = state.relationships.reduce((n, r) => n + (r.metrics?.length ?? 0), 0);
+  const totalMetrics = state.entities.reduce((n, e) => n + e.metrics.length, 0) + relMetrics;
   clack.log.step(
     `Data model: ${state.entities.length} entities, ` +
     `${state.relationships.length} relationships, ` +

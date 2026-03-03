@@ -2,6 +2,7 @@ import type { Readable, Writable } from "node:stream";
 import type { GridCell } from "../state.js";
 import { cycleStrategy } from "../state.js";
 import { moveCursor, type CursorPos } from "./layout.js";
+import ansiEscapes from "ansi-escapes";
 import { renderGrid, showCursor, type GridRenderState } from "./renderer.js";
 
 /* ------------------------------------------------------------------ */
@@ -65,6 +66,10 @@ export function runGridLoop(opts: GridInputOptions): Promise<GridCell[][]> {
       tty.setRawMode(true);
     }
 
+    // Switch to alternate screen buffer so the grid doesn't
+    // overwrite the clack prompts above
+    output.write(ansiEscapes.enterAlternativeScreen);
+
     function render(): void {
       const { rows, cols } = getTermSize();
       const state: GridRenderState = {
@@ -80,6 +85,7 @@ export function runGridLoop(opts: GridInputOptions): Promise<GridCell[][]> {
 
     function cleanup(): void {
       showCursor(output);
+      output.write(ansiEscapes.exitAlternativeScreen);
       if (typeof tty.setRawMode === "function") {
         tty.setRawMode(wasRaw);
       }

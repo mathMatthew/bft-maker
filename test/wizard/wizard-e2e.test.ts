@@ -25,6 +25,7 @@ const testDbPath = `/tmp/bft-wizard-test-${process.pid}.duckdb`;
 
 function createTestDatabase(): void {
   try { fs.unlinkSync(testDbPath); } catch { /* ignore */ }
+  try { fs.unlinkSync(testDbPath + ".bft-draft.json"); } catch { /* ignore */ }
 
   // Create DB in a child process so the file lock is released when it exits
   const script = `
@@ -108,13 +109,23 @@ describe("wizard end-to-end (db-driven)", { skip: !tmuxAvailable() }, () => {
     await waitForText(session, "additive");
     sendKeys(session, "Enter");   // Yes
 
+    // quantity (junction metric on sales): additive?
+    await waitForText(session, "additive");
+    sendKeys(session, "Enter");   // Yes
+
+    // ── Hub: select Strategy matrix ─────────────────────────────
+
+    await waitForText(session, "What next", 10000);
+    sendKeys(session, "Down");    // → Strategy matrix
+    sendKeys(session, "Enter");
+
     // ── Step 2: Strategy matrix ───────────────────────────────
 
     await waitForText(session, "Strategy Matrix", 10000);
     await sleep(500);
 
     // Set all foreign cells to elimination
-    // Grid: unit_price(H,Rsv), units_sold(H,Rsv), budget(Rsv,H)
+    // Grid: unit_price(H,Rsv), units_sold(H,Rsv), budget(Rsv,H), quantity(H,H)
     sendKeys(session, "Right");   // → unit_price × regions
     await sleep(300);
     sendKeys(session, "Space");   // → elimination
@@ -130,6 +141,15 @@ describe("wizard end-to-end (db-driven)", { skip: !tmuxAvailable() }, () => {
     sendKeys(session, "Space");   // → elimination
     await sleep(300);
     sendKeys(session, "q");
+
+    // ── Hub: select BFT tables ──────────────────────────────
+    // Menu: Data model, Strategy matrix, Weights, BFT tables, Save & quit
+
+    await waitForText(session, "What next", 10000);
+    sendKeys(session, "Down");    // → Strategy matrix
+    sendKeys(session, "Down");    // → Weights
+    sendKeys(session, "Down");    // → BFT tables
+    sendKeys(session, "Enter");
 
     // ── Step 4: Tables ────────────────────────────────────────
 
@@ -149,9 +169,21 @@ describe("wizard end-to-end (db-driven)", { skip: !tmuxAvailable() }, () => {
     sendKeys(session, "Space");   // units_sold
     sendKeys(session, "Down");
     sendKeys(session, "Space");   // budget
+    sendKeys(session, "Down");
+    sendKeys(session, "Space");   // quantity (junction metric)
     sendKeys(session, "Enter");
 
     await waitForText(session, "Table name");
+    sendKeys(session, "Enter");
+
+    // ── Hub: select Generate manifest ────────────────────────
+    // Menu: Data model, Strategy matrix, Weights, BFT tables, Generate manifest, Save & quit
+
+    await waitForText(session, "What next", 10000);
+    sendKeys(session, "Down");    // → Strategy matrix
+    sendKeys(session, "Down");    // → Weights
+    sendKeys(session, "Down");    // → BFT tables
+    sendKeys(session, "Down");    // → Generate manifest
     sendKeys(session, "Enter");
 
     // ── Verify output ─────────────────────────────────────────
@@ -220,7 +252,7 @@ describe("wizard end-to-end (db-driven)", { skip: !tmuxAvailable() }, () => {
     await waitForText(session, "Looks good");
     sendKeys(session, "Enter");   // "Looks good, continue"
 
-    // ── Metric nature: unit_price and budget ──────────────────
+    // ── Metric nature: unit_price, budget, and quantity (junction) ──
 
     await waitForText(session, "additive", 10000);
     sendKeys(session, "Enter");   // unit_price: Yes
@@ -228,12 +260,21 @@ describe("wizard end-to-end (db-driven)", { skip: !tmuxAvailable() }, () => {
     await waitForText(session, "additive");
     sendKeys(session, "Enter");   // budget: Yes
 
+    await waitForText(session, "additive");
+    sendKeys(session, "Enter");   // quantity (junction): Yes
+
+    // ── Hub: select Strategy matrix ─────────────────────────────
+
+    await waitForText(session, "What next", 10000);
+    sendKeys(session, "Down");    // → Strategy matrix
+    sendKeys(session, "Enter");
+
     // ── Step 2: Grid ──────────────────────────────────────────
 
     await waitForText(session, "Strategy Matrix", 10000);
     await sleep(500);
 
-    // Grid: unit_price(H on products, Rsv on regions), budget(Rsv on products, H on regions)
+    // Grid: unit_price(H,Rsv), budget(Rsv,H), quantity(H,H)
     // Set unit_price×regions to allocation
     sendKeys(session, "Right");
     await sleep(300);
@@ -243,10 +284,26 @@ describe("wizard end-to-end (db-driven)", { skip: !tmuxAvailable() }, () => {
     await sleep(300);
     sendKeys(session, "q");
 
+    // ── Hub: select Weights ─────────────────────────────────
+    // Menu: Data model, Strategy matrix, Weights, BFT tables, Save & quit
+
+    await waitForText(session, "What next", 10000);
+    sendKeys(session, "Down");    // → Strategy matrix
+    sendKeys(session, "Down");    // → Weights
+    sendKeys(session, "Enter");
+
     // ── Step 3: Weights ───────────────────────────────────────
 
     await waitForText(session, "Weight column", 10000);
     sendText(session, "quantity");
+    sendKeys(session, "Enter");
+
+    // ── Hub: select BFT tables ──────────────────────────────
+
+    await waitForText(session, "What next", 10000);
+    sendKeys(session, "Down");    // → Strategy matrix
+    sendKeys(session, "Down");    // → Weights
+    sendKeys(session, "Down");    // → BFT tables
     sendKeys(session, "Enter");
 
     // ── Step 4: Tables ────────────────────────────────────────
@@ -268,6 +325,15 @@ describe("wizard end-to-end (db-driven)", { skip: !tmuxAvailable() }, () => {
     sendKeys(session, "Enter");
 
     await waitForText(session, "Table name");
+    sendKeys(session, "Enter");
+
+    // ── Hub: select Generate manifest ────────────────────────
+
+    await waitForText(session, "What next", 10000);
+    sendKeys(session, "Down");    // → Strategy matrix
+    sendKeys(session, "Down");    // → Weights
+    sendKeys(session, "Down");    // → BFT tables
+    sendKeys(session, "Down");    // → Generate manifest
     sendKeys(session, "Enter");
 
     // ── Verify ────────────────────────────────────────────────

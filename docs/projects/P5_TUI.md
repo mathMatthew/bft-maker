@@ -4,74 +4,80 @@
 A terminal UI that guides users through building a BFT manifest — from data model discovery through strategy definition to BFT table composition.
 
 ## Prerequisite
-User prepares a DuckDB database (`.duckdb` file) containing their data as tables or views. DuckDB can import from anything (CSV, Parquet, Postgres, MySQL, SQLite, ODBC via nanodbc extension), so this is a universal entry point. No queries are run against user data at runtime — all metadata comes from `information_schema` and schema constraints.
+User prepares a DuckDB database (`.duckdb` file) containing their data as tables or views. DuckDB can import from anything (CSV, Parquet, Postgres, MySQL, SQLite, ODBC via nanodbc extension), so this is a universal entry point.
 
 ## Workflow
 
 ### Step 1: Data Model Discovery
-
-#### 1a. Pick Tables & Classify Columns
-TUI opens the `.duckdb` file and introspects via `information_schema`:
-- Lists tables → user picks which are entities (vs junction tables vs ignored)
-- For each entity, shows columns with types → user classifies as:
-  - **ID** (primary key — can be composite, e.g. `store_id, month`)
-  - **Metric** (numeric columns that will be summed/aggregated)
-  - **Reference data** (labels, names — along for the ride, no independent value)
-- Row counts and estimated_links are provided by the user (not derived from data queries)
-- Auto-detection aids: numeric columns default to metric candidates, text to reference
-
-#### 1b. Define Directed Relationships
-User defines directed edges in a relationship graph. Each edge has:
-- **From entity** + key columns
-- **To entity** + key columns
-- **Junction table** (for M-M relationships)
-- **Direction** — defaults to one-way (left → right as entered), user can toggle to bidirectional
-
-Composite keys are supported (e.g. join on `store_id + month`).
-
-**Cardinality and direction defaults:**
-- For M-1 relationships, direction is auto-set based on schema constraints: many → one (the side with a unique/primary key constraint is the "one" side). Derived from `information_schema` metadata, not data queries.
-- For M-M relationships, defaults to the order the user specified (left → right). User can flip or make bidirectional.
-
-**Cycle detection:**
-- Runs on every edge add/toggle (cheap DFS on directed graph)
-- If adding an edge or toggling to bidirectional would create a cycle, warn immediately and ask the user to pick a direction to break it
-- Cycles are blocked — they mean infinite propagation paths
-
-The relationship graph gates the strategy matrix: if there's no directed path from a metric's home entity to another entity, that cell is N/A (grayed out). User can go back and add/change relationships to unlock cells.
-
-Auto-detection where possible: foreign key constraints, shared column names across tables. User confirms/edits.
+TUI opens the `.duckdb` file and introspects via `information_schema` + sample queries:
+- Auto-detects PKs (snake_case `_id` and camelCase `ID` conventions), FKs, junction tables, candidate metrics
+- Loads 5 sample rows per table for preview
+- User reviews/edits: reclassify tables, edit column roles, preview data
+- Metric classification: additive/non-additive with sample values shown, or "Not a metric — remove"
 
 ### Step 2: Strategy Matrix
-A grid view: metrics on rows (grouped by home entity), entities on columns.
-- "H" marks the home entity for each metric (auto-filled from step 1)
-- User fills in "E" (elimination) or "A" (allocation) for reachable entities
-- Unreachable entities (no directed path from home) are grayed out / N/A
-- Blank = reserve (the default)
-- This matrix is a transient workspace — a tool for defining propagation rules, not permanent state
+Custom grid on alternate screen: metrics on rows, entities on columns. Navigate with arrows/hjkl, cycle with space/enter, q to finish.
 
 ### Step 3: Weight Definition
-For each "A" (allocation) cell in the matrix, user defines the weight. This step only appears for metrics that have allocation strategies.
+For each allocation/sum-over-sum cell, user provides the weight column name.
 
 ### Step 4: BFT Table Composition
-User composes BFT tables by selecting entities and metrics. Reference data comes along for the ride — it helps interpret metrics but has no value on its own. No metric, no row, no need for reference data.
+User defines BFT tables by selecting grain entities and metrics.
+
+### Hub Menu
+After step 1, a non-linear hub menu lets the user jump to any section, see completion status, and generate when ready. Progress is saved after each step; drafts persist across sessions.
+
+## Stack
+
+**@clack/prompts + custom strategy matrix grid**, vanilla TypeScript.
+
+- **@clack/prompts** for form steps (select, multiselect, text). `q` mapped to cancel globally via `updateSettings`. Text prompts temporarily disable the alias.
+- **Custom ANSI grid** for the strategy matrix. Alternate screen buffer for clean rendering.
+- **chalk** for colors, **ansi-escapes** for cursor control, **duckdb** for introspection.
+
+### Module structure
+
+```
+src/wizard/
+├── index.ts              # Hub menu, wizard runner
+├── state.ts              # Wizard state + pure transition functions
+├── introspect.ts         # DuckDB introspection: tables, FKs, metrics, sample rows
+├── draft.ts              # Save/load draft state for resume
+├── steps/
+│   ├── data-model.ts     # Step 1: discovery + table preview + metric classification
+│   ├── strategy-matrix.ts # Step 2: grid launcher
+│   ├── weights.ts        # Step 3: weight prompts
+│   └── tables.ts         # Step 4: table composition
+└── grid/
+    ├── layout.ts         # Pure layout math: column widths, scroll, viewport
+    ├── renderer.ts       # ANSI grid drawing
+    └── input.ts          # Raw mode keypress handling
+```
 
 ## Design Decisions
 - **TUI, not web UI** — fits the developer tool nature of bft-maker
-- **Directed relationship graph** — direction is defined in the data model (step 1b), not in the strategy matrix. The matrix just shows what's reachable. Same approach as Power BI.
-- **No data queries** — all metadata from `information_schema` and schema constraints. Row counts and estimated_links are user-provided. No surprise queries against large tables.
-- **Same metric, different paths** — a metric can be propagated to the same entity via different paths or with different allocation schemes, producing named variants (e.g. `salary_by_headcount` vs `salary_by_fte`)
-- **Default naming with easy overrides** — auto-generate names, let user tweak
-- **Composite keys** — relationships can join on multiple columns (e.g. `store_id + month`)
-- **Cycle-free graph** — cycles detected and blocked at edge definition time
+- **Directed relationship graph** — direction defined in data model, matrix shows reachability
+- **Sample data, not full queries** — 5 rows loaded during introspection for preview. Row counts from actual data; no surprise queries against large tables.
+- **Hub menu over linear wizard** — after the data model step, user can jump to any section. Progress saved as drafts.
+- **`q` to quit everywhere** — clack alias maps `q` → cancel in select/multiselect; grid uses `q` natively
 
 ## Open Questions
-- TUI framework choice (Ink/React, blessed, raw ANSI, something else?)
-- How to handle wide matrices (many entities) in terminal width constraints
-- Exact interaction model for the matrix (cursor navigation? vim keys? tab between cells?)
-- Does the output go directly to a manifest YAML, or is there an intermediate format?
-- How to visualize the directed relationship graph in a terminal (ASCII arrows? list view?)
-- Multi-hop paths in the matrix: does the user define each hop separately, or does the TUI infer paths from the graph?
+- How to visualize the directed relationship graph in a terminal
+- Multi-hop paths in the matrix: user defines each hop vs TUI infers from graph
 
 ## Status
-Design — workflow, data model, and key constraints agreed. Implementation not started.
+Implementation in progress on `feat/p5-tui-wizard`. Core wizard functional, manual testing with Northwind dataset ongoing.
+
+### Done
+- Core wizard: introspection → data model review → strategy matrix → weights → table composition → manifest YAML
+- Auto-detection of PKs, FKs, junctions, metrics — handles both snake_case and camelCase conventions
+- Junction table metrics detected and placed on relationships
+- Strategy matrix + table preview on alternate screen buffers
+- `q` to quit, SIGINT handler, "Not a metric" option, sample values in prompts
+- Save/load draft with hub menu for non-linear navigation
+- 187 tests passing
+
+### Remaining
+- [ ] Commit session 2 improvements
+- [ ] Manual testing with Northwind (wide matrix)
+- [ ] PR

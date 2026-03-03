@@ -1,4 +1,5 @@
 import * as clack from "@clack/prompts";
+import { settings } from "@clack/core";
 import type { BftTable } from "../../manifest/types.js";
 import type { WizardState } from "../state.js";
 import { allMetricDefs } from "../state.js";
@@ -11,6 +12,8 @@ async function promptTable(
   state: WizardState,
   existingNames: string[],
 ): Promise<BftTable | null> {
+  // Disable q→cancel alias so user can type 'q' in text input
+  settings.aliases.delete("q");
   const name = await clack.text({
     message: "Table name (or leave empty to finish)",
     placeholder: "e.g. department_financial, student_experience",
@@ -25,6 +28,7 @@ async function promptTable(
       return undefined;
     },
   });
+  settings.aliases.set("q", "cancel");
 
   if (clack.isCancel(name) || name === "") return null;
 
@@ -76,7 +80,7 @@ export async function runTablesStep(state: WizardState): Promise<boolean> {
     );
     if (table === null) {
       if (state.bftTables.length === 0) {
-        clack.log.warning("You need at least 1 BFT table.");
+        clack.log.warning("You need at least 1 BFT table. Press q to quit.");
         continue;
       }
       break;
