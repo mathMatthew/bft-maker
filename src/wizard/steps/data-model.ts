@@ -535,10 +535,15 @@ async function editTableDetails(model: DetectedModel, targetTable?: string): Pro
       }
 
       case "connect": {
-        const targetTables = model.tables.filter((t) => t.name !== table.name);
+        const allTables = [...model.entities, ...model.junctions, ...model.unclassified];
         const target = await clack.select({
           message: `Connect ${colName} to which table?`,
-          options: targetTables.map((t) => ({ value: t.name, label: t.name })),
+          options: allTables.map((t) => ({
+            value: t.name,
+            label: t.name,
+            hint: t.name === table.name ? "self-join not supported" : undefined,
+            disabled: t.name === table.name,
+          })),
         });
         if (clack.isCancel(target)) continue;
 

@@ -61,6 +61,9 @@ src/wizard/
 - **Hub menu over linear wizard** — after the data model step, user can jump to any section. Progress saved as drafts.
 - **`q` to quit everywhere** — clack alias maps `q` → cancel in select/multiselect; grid uses `q` natively
 
+## Known Limitations
+- **No self-joins** — a table cannot reference itself (e.g., `employees.ReportsTo → employees.employee_id`). Self-referential relationships create recursive propagation paths that the current manifest/codegen doesn't support. The UI shows these as disabled with "self-join not supported" hint. Supporting hierarchical propagation requires changes to the manifest schema, planner, and SQL codegen.
+
 ## Open Questions
 - How to visualize the directed relationship graph in a terminal
 - Multi-hop paths in the matrix: user defines each hop vs TUI infers from graph
