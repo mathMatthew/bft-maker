@@ -33,7 +33,7 @@ function createTestDatabase(): void {
     const db = new duckdb.Database('${testDbPath}', {}, (err) => {
       if (err) { console.error(err); process.exit(1); }
       const sql = [
-        "CREATE TABLE products (product_id INTEGER, name VARCHAR, unit_price DOUBLE, units_sold INTEGER)",
+        "CREATE TABLE products (product_id INTEGER, name VARCHAR, price DOUBLE, units_sold INTEGER)",
         "INSERT INTO products VALUES (1,'Widget',9.99,100),(2,'Gadget',19.99,50),(3,'Doohickey',4.99,200)",
         "CREATE TABLE regions (region_id INTEGER, name VARCHAR, budget DOUBLE)",
         "INSERT INTO regions VALUES (1,'North',50000),(2,'South',30000)",

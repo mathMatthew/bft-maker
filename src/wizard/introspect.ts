@@ -351,7 +351,7 @@ export function guessMetricNature(colName: string): "additive" | "non-additive" 
     .toLowerCase()
     .split("_");
 
-  const NON_ADDITIVE = ["per", "rate", "ratio", "pct", "percent", "avg", "average", "score", "rating", "grade"];
+  const NON_ADDITIVE = ["per", "unit", "rate", "ratio", "pct", "percent", "avg", "average", "score", "rating", "grade"];
   for (const w of words) {
     if (NON_ADDITIVE.includes(w)) return "non-additive";
   }

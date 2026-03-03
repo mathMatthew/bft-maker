@@ -31,7 +31,9 @@ describe("guessMetricNature", () => {
   });
 
   it("classifies non-additive names", () => {
-    assert.equal(guessMetricNature("unit_price"), "additive"); // no "per" word
+    assert.equal(guessMetricNature("unit_price"), "non-additive"); // "unit" = per-unit
+    assert.equal(guessMetricNature("unit_cost"), "non-additive");
+    assert.equal(guessMetricNature("unitRevenue"), "non-additive");
     assert.equal(guessMetricNature("cost_per_unit"), "non-additive");
     assert.equal(guessMetricNature("revenue_per_student"), "non-additive");
     assert.equal(guessMetricNature("costPerUnit"), "non-additive");
@@ -42,6 +44,9 @@ describe("guessMetricNature", () => {
     assert.equal(guessMetricNature("gpa"), "additive"); // ambiguous, defaults to additive
     assert.equal(guessMetricNature("rating"), "non-additive");
     assert.equal(guessMetricNature("grade"), "non-additive");
+    // "units" (plural) is a count, not a per-unit modifier
+    assert.equal(guessMetricNature("units_sold"), "additive");
+    assert.equal(guessMetricNature("units_in_stock"), "additive");
   });
 
   it("defaults to additive for ambiguous names", () => {

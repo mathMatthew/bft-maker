@@ -602,12 +602,19 @@ async function askMetricNature(
   model: DetectedModel,
 ): Promise<boolean | null> {
   const table = model.tables.find((t) => t.name === m.table);
-  const samples = table?.sampleRows
-    .map((row) => row[m.column])
-    .filter((v) => v != null)
-    .slice(0, 5) ?? [];
+  const seen = new Set<string>();
+  const samples: unknown[] = [];
+  for (const row of table?.sampleRows ?? []) {
+    const v = row[m.column];
+    if (v == null) continue;
+    const key = String(v);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    samples.push(v);
+    if (samples.length >= 5) break;
+  }
   const sampleHint = samples.length > 0
-    ? ` (samples: ${samples.join(", ")})`
+    ? ` (e.g. ${samples.join(", ")})`
     : "";
 
   const current = m.nature;
