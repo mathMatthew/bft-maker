@@ -90,6 +90,9 @@ export function runGridLoop(opts: GridInputOptions): Promise<GridCell[][]> {
         tty.setRawMode(wasRaw);
       }
       input.removeListener("data", onData);
+      if (typeof output === "object" && "removeListener" in output) {
+        (output as NodeJS.WriteStream).removeListener?.("resize", onResize);
+      }
     }
 
     function onData(data: Buffer): void {
@@ -131,8 +134,9 @@ export function runGridLoop(opts: GridInputOptions): Promise<GridCell[][]> {
     input.on("data", onData);
 
     // Handle terminal resize
+    const onResize = () => render();
     if (typeof output === "object" && "on" in output) {
-      (output as NodeJS.WriteStream).on?.("resize", () => render());
+      (output as NodeJS.WriteStream).on?.("resize", onResize);
     }
 
     // Initial render

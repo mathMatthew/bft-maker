@@ -67,7 +67,7 @@ async function promptTable(
 }
 
 export async function runTablesStep(state: WizardState): Promise<boolean> {
-  clack.intro("Step 4: Compose BFT tables");
+  clack.log.step("Step 4: Compose BFT tables");
   clack.log.info(
     "Define one or more BFT tables. Each table specifies which entities\n" +
     "(grain) and which metrics to include.",

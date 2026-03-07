@@ -15,7 +15,7 @@ export async function runWeightsStep(state: WizardState): Promise<boolean> {
     return true;
   }
 
-  clack.intro("Step 3: Define weight columns");
+  clack.log.step("Step 3: Define weight columns");
   clack.log.info(
     "For each allocation or sum/sum strategy, specify the weight column name.\n" +
     "This column should exist in the relationship table.",

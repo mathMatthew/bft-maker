@@ -33,7 +33,11 @@ function coerceBigInts(rows: Record<string, unknown>[]): Record<string, unknown>
   for (const row of rows) {
     for (const key of Object.keys(row)) {
       if (typeof row[key] === "bigint") {
-        row[key] = Number(row[key]);
+        const n = row[key] as bigint;
+        if (n > BigInt(Number.MAX_SAFE_INTEGER) || n < BigInt(-Number.MAX_SAFE_INTEGER)) {
+          throw new Error(`Value for "${key}" exceeds safe integer range: ${n}`);
+        }
+        row[key] = Number(n);
       }
     }
   }
@@ -472,7 +476,7 @@ export async function introspect(dbPath: string): Promise<DetectedModel> {
         db,
         `SELECT column_name, data_type
          FROM information_schema.columns
-         WHERE table_schema = 'main' AND table_name = '${tableName}'
+         WHERE table_schema = 'main' AND table_name = '${tableName.replace(/'/g, "''")}'
          ORDER BY ordinal_position`,
       );
 
@@ -486,7 +490,7 @@ export async function introspect(dbPath: string): Promise<DetectedModel> {
         const colType = c.data_type as string;
 
         let isUnique = false;
-        if (rowCount > 0) {
+        if (rowCount > 0 && looksLikeId(colName)) {
           const uniqResult = await query(
             db,
             `SELECT (COUNT(DISTINCT "${colName}") = COUNT(*))::BOOLEAN AS is_unique FROM "${tableName}"`,

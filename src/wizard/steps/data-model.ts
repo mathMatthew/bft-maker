@@ -734,8 +734,10 @@ async function reclassifyTable(model: DetectedModel): Promise<boolean> {
 /* ------------------------------------------------------------------ */
 
 /** Track user's preferred preview settings across previews in a session. */
-let previewRowCount = 5;
-let previewMode: PreviewMode = "rows";
+interface PreviewSettings {
+  rowCount: number;
+  mode: PreviewMode;
+}
 
 async function loadPreviewData(
   dbPath: string,
@@ -752,7 +754,7 @@ async function loadPreviewData(
   return { mode, count, sampleRows };
 }
 
-async function previewTable(model: DetectedModel, dbPath: string): Promise<boolean> {
+async function previewTable(model: DetectedModel, dbPath: string, settings: PreviewSettings): Promise<boolean> {
   const allTables = [...model.entities, ...model.junctions, ...model.unclassified];
 
   const tableName = await clack.select({
@@ -768,8 +770,8 @@ async function previewTable(model: DetectedModel, dbPath: string): Promise<boole
   const table = model.tables.find((t) => t.name === tableName)!;
   const out = process.stdout;
 
-  let currentCount = previewRowCount;
-  let currentMode = previewMode;
+  let currentCount = settings.rowCount;
+  let currentMode = settings.mode;
 
   out.write(ansiEscapes.enterAlternativeScreen);
 
@@ -782,7 +784,7 @@ async function previewTable(model: DetectedModel, dbPath: string): Promise<boole
 
       if (action === "mode") {
         currentMode = currentMode === "rows" ? "distinct" : "rows";
-        previewMode = currentMode;
+        settings.mode = currentMode;
         continue;
       }
 
@@ -790,7 +792,7 @@ async function previewTable(model: DetectedModel, dbPath: string): Promise<boole
         const n = await readNumberInline("How many", currentCount);
         if (n != null) {
           currentCount = n;
-          previewRowCount = n;
+          settings.rowCount = n;
         }
         continue;
       }
@@ -813,7 +815,7 @@ async function previewTable(model: DetectedModel, dbPath: string): Promise<boole
 /*  Edit loop                                                         */
 /* ------------------------------------------------------------------ */
 
-async function editLoop(model: DetectedModel, dbPath: string): Promise<boolean> {
+async function editLoop(model: DetectedModel, dbPath: string, settings: PreviewSettings): Promise<boolean> {
   while (true) {
     showModel(model);
 
@@ -833,7 +835,7 @@ async function editLoop(model: DetectedModel, dbPath: string): Promise<boolean> 
       case "done":
         return true;
       case "preview":
-        if (!(await previewTable(model, dbPath))) return false;
+        if (!(await previewTable(model, dbPath, settings))) return false;
         break;
       case "detail":
         if (!(await editTableDetails(model))) return false;
@@ -945,7 +947,8 @@ export async function runDataModelStep(
   }
 
   // Review and edit
-  if (!(await editLoop(model, dbPath))) return { ok: false, model };
+  const previewSettings: PreviewSettings = { rowCount: 5, mode: "rows" as PreviewMode };
+  if (!(await editLoop(model, dbPath, previewSettings))) return { ok: false, model };
 
   // Validation
   if (model.entities.length === 0) {

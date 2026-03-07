@@ -94,7 +94,7 @@ export function renderGrid(
   for (let vi = 0; vi < viewport.visibleRows; vi++) {
     const ri = vi + viewport.rowOffset;
     if (ri >= grid.length) break;
-    renderRow(ri, grid[ri], metricNames[ri], entityNames, layout, viewport, cursor, out);
+    renderRow(ri, grid[ri], metricNames[ri], entityNames, layout, viewport, cursor, out, grid.length);
   }
 
   // Status bar
@@ -148,6 +148,7 @@ function renderRow(
   viewport: Viewport,
   cursor: CursorPos,
   out: Writable,
+  totalRows: number,
 ): void {
   const isCurrentRow = rowIdx === cursor.row;
   const rowHeader = isCurrentRow
@@ -173,7 +174,7 @@ function renderRow(
   }
   if (
     rowIdx === viewport.rowOffset + viewport.visibleRows - 1 &&
-    viewport.rowOffset + viewport.visibleRows < row.length
+    viewport.rowOffset + viewport.visibleRows < totalRows
   ) {
     line += chalk.dim(" ▼");
   }
