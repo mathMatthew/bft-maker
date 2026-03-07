@@ -92,6 +92,11 @@ const fixtures: Fixture[] = [
     manifestPath: "data/university-ops/manifest.yaml",
     dataDir: "data/university-ops",
   },
+  {
+    name: "semi-additive",
+    manifestPath: "data/semi-additive/manifest.yaml",
+    dataDir: "data/semi-additive",
+  },
 ];
 
 // ---------------------------------------------------------------------------

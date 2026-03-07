@@ -42,6 +42,8 @@ export interface MetricPlan {
   nature: "additive" | "non-additive";
   /** Source column name in the CSV/table (defaults to name if not overridden). */
   sourceColumn: string;
+  /** Stock metric: use weighted average when summarizing out time dimensions. */
+  stock: boolean;
 
   /** Strategy for each non-home entity in the compute grain */
   propagatedDimensions: DimensionStrategy[];
@@ -84,11 +86,26 @@ export interface JoinLink {
 /**
  * Complete build plan for one BFT table.
  */
+export interface TimePlan {
+  /** Time entity name. */
+  entity: string;
+  /** Date column on the time entity's source table. */
+  column: string;
+  /** SQL interval for one period (e.g., "INTERVAL 1 MONTH"). */
+  interval: string;
+  /** Weighting mode: 'days' or 'equal'. */
+  weighting: "days" | "equal";
+  /** Set of entity names that are time-derived (reachable from time entity via M2O). */
+  timeDerivedEntities: Set<string>;
+}
+
 export interface TablePlan {
   tableName: string;
   bftGrain: string[];
   grainGroups: GrainGroup[];
   bftJoinChain: JoinLink[];
+  /** Present when manifest has a time declaration and stock metrics exist in this table. */
+  timePlan?: TimePlan;
 }
 
 /**

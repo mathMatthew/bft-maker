@@ -94,7 +94,7 @@ function generateTableSQL(plan: TablePlan, manifest: Manifest, sm: SourceMapping
       metrics: bftMetrics,
       needsSummarization: false,
     };
-    sections.push(baseJoinSQL(plan.bftGrain, plan.bftJoinChain, allMetrics, sm, prefix));
+    sections.push(baseJoinSQL(plan.bftGrain, plan.bftJoinChain, allMetrics, sm, prefix, plan.timePlan));
     sections.push(weightedSQL(mergedGroup, sm, prefix));
     sections.push(assemblySQL(plan, allMetrics, sm, prefix, label));
   } else if (bftMetrics.length === 0) {
@@ -102,7 +102,7 @@ function generateTableSQL(plan: TablePlan, manifest: Manifest, sm: SourceMapping
     if (sumGroups.length === 1) {
       // Single summarization group: standard summarization pipeline
       const group = sumGroups[0];
-      sections.push(baseJoinSQL(group.grain, group.joinChain, allMetrics, sm, prefix));
+      sections.push(baseJoinSQL(group.grain, group.joinChain, allMetrics, sm, prefix, plan.timePlan));
       sections.push(weightedSQL(group, sm, prefix));
       sections.push(summarizationSQL(plan, group, allMetrics, sm, prefix));
       sections.push(assemblySQL(plan, allMetrics, sm, prefix, label));
@@ -110,7 +110,7 @@ function generateTableSQL(plan: TablePlan, manifest: Manifest, sm: SourceMapping
       // Multiple summarization groups: per-group pipelines + combined assembly
       for (const group of sumGroups) {
         const gPrefix = `${prefix}_${group.id}`;
-        sections.push(baseJoinSQL(group.grain, group.joinChain, group.metrics, sm, gPrefix));
+        sections.push(baseJoinSQL(group.grain, group.joinChain, group.metrics, sm, gPrefix, plan.timePlan));
         sections.push(weightedSQL(group, sm, gPrefix));
         sections.push(summarizationSQL(plan, group, group.metrics, sm, gPrefix));
       }
@@ -125,11 +125,11 @@ function generateTableSQL(plan: TablePlan, manifest: Manifest, sm: SourceMapping
       metrics: bftMetrics,
       needsSummarization: false,
     };
-    sections.push(baseJoinSQL(plan.bftGrain, plan.bftJoinChain, bftMetrics, sm, prefix));
+    sections.push(baseJoinSQL(plan.bftGrain, plan.bftJoinChain, bftMetrics, sm, prefix, plan.timePlan));
     sections.push(weightedSQL(mergedBftGroup, sm, prefix));
     for (const group of sumGroups) {
       const gPrefix = `${prefix}_${group.id}`;
-      sections.push(baseJoinSQL(group.grain, group.joinChain, group.metrics, sm, gPrefix));
+      sections.push(baseJoinSQL(group.grain, group.joinChain, group.metrics, sm, gPrefix, plan.timePlan));
       sections.push(weightedSQL(group, sm, gPrefix));
       sections.push(summarizationSQL(plan, group, group.metrics, sm, gPrefix));
     }
@@ -216,7 +216,8 @@ function baseJoinSQL(
   joinChain: JoinLink[],
   allMetrics: MetricPlan[],
   sm: SourceMapping,
-  prefix: string
+  prefix: string,
+  timePlan?: import("./types.js").TimePlan,
 ): string {
   // Build collision-free aliases for all entities and relationships in the query
   const allNames = [...grainEntities, ...joinChain.map((l) => l.relationship)];
@@ -246,6 +247,14 @@ function baseJoinSQL(
       } else {
         selectCols.push(`${alias}.${q(m.name)}`);
       }
+    }
+  }
+
+  // Include time column if time entity is in the grain and stock metrics exist
+  if (timePlan && grainEntities.includes(timePlan.entity) && allMetrics.some((m) => m.stock)) {
+    const timeAlias = aliasMap.get(timePlan.entity);
+    if (timeAlias) {
+      selectCols.push(`${timeAlias}.${q(timePlan.column)}`);
     }
   }
 
@@ -399,11 +408,26 @@ function summarizationSQL(
     selectCols.push(nameCol);
   }
 
+  // Determine if we're summarizing out a time-derived entity
+  const summarizedEntities = group.grain.filter((e) => !new Set(bftEntitiesInGrain).has(e));
+  const summarizingTime = plan.timePlan != null &&
+    summarizedEntities.some((e) => plan.timePlan!.timeDerivedEntities.has(e));
+
   // Metric expressions: SUM with allocation weights where applicable
   for (const metric of metrics) {
     if (metric.nature === "non-additive") {
       selectCols.push(`SUM(${q(metric.name)}) AS ${q(metric.name)}`);
       selectCols.push(`SUM(${sumOverSumWeightExpr(metric)}) AS ${q(metric.name + "_weight")}`);
+    } else if (metric.stock && summarizingTime) {
+      // Stock metric with time being summarized out: use weighted average
+      const tp = plan.timePlan!;
+      if (tp.weighting === "equal") {
+        selectCols.push(`AVG(${allocationExpr(metric, sm)}) AS ${q(metric.name)}`);
+      } else {
+        const dateCol = q(tp.column);
+        const weight = `DATE_DIFF('day', ${dateCol}, ${dateCol} + ${tp.interval})`;
+        selectCols.push(`SUM(${allocationExpr(metric, sm)} * ${weight}) / SUM(${weight}) AS ${q(metric.name)}`);
+      }
     } else {
       // allocationExpr returns "metric * 1.0" for non-allocated metrics,
       // "metric * 1.0 / weight" for allocated ones — handles all additive cases.
@@ -810,9 +834,16 @@ function validationSQL(plan: TablePlan, allMetrics: MetricPlan[], sm: SourceMapp
   const hasSummarization = plan.grainGroups.some((g) => g.needsSummarization);
   let n = 1;
 
+  // Determine if time is being summarized out of this table
+  const summarizesTime = plan.timePlan != null && hasSummarization &&
+    plan.grainGroups.some((g) => g.needsSummarization &&
+      g.grain.some((e) => plan.timePlan!.timeDerivedEntities.has(e) && !new Set(plan.bftGrain).has(e)));
+
   // V: SUM check for each additive metric
   for (const metric of allMetrics) {
     if (metric.nature === "non-additive") continue;
+    // Stock metrics with time summarized out won't match source SUM (intentionally)
+    if (metric.stock && summarizesTime) continue;
 
     const home = homeEntity(metric);
     // For relationship metrics, the source table is the junction table

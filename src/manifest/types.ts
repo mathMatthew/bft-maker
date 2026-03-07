@@ -14,6 +14,8 @@ export interface MetricDef {
   nature: "additive" | "non-additive";
   /** Override the source column name if it differs from the metric name. */
   source_column?: string;
+  /** Stock metric: use weighted average (not SUM) when summarizing out time dimensions. */
+  stock?: boolean;
 }
 
 export interface Entity {
@@ -91,10 +93,33 @@ export const DEFAULT_PLACEHOLDER_LABELS: Required<PlaceholderLabels> = {
   elimination: "<Unallocated>",
 };
 
+export type TimeGranularity = "day" | "week" | "month" | "quarter" | "year";
+export type TimeWeighting = "days" | "equal";
+
+export const VALID_TIME_GRANULARITIES: ReadonlySet<string> = new Set([
+  "day", "week", "month", "quarter", "year",
+]);
+
+export const VALID_TIME_WEIGHTINGS: ReadonlySet<string> = new Set([
+  "days", "equal",
+]);
+
+export interface TimeDeclaration {
+  /** Which entity is the finest time grain. */
+  entity: string;
+  /** Date column on the time entity's source table. */
+  column: string;
+  /** What each row represents. */
+  granularity: TimeGranularity;
+  /** How to weight stock metrics: 'days' (day-weighted) or 'equal' (each period = 1). Default: 'days'. */
+  weighting?: TimeWeighting;
+}
+
 export interface Manifest {
   entities: Entity[];
   relationships: Relationship[];
   propagations: MetricPropagation[];
   bft_tables: BftTable[];
   placeholder_labels?: PlaceholderLabels;
+  time?: TimeDeclaration;
 }
