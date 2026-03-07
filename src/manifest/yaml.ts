@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as yaml from "js-yaml";
-import type { Manifest, MetricPropagation, PropagationEdge } from "./types.js";
+import type { Manifest, MetricPropagation, PropagationEdge, TimeDeclaration } from "./types.js";
 import { DEFAULT_PLACEHOLDER_LABELS } from "./types.js";
 
 /** What the YAML parser produces before normalization — metric can be a list. */
@@ -45,6 +45,9 @@ export function parseManifest(yamlString: string): Manifest {
       ...DEFAULT_PLACEHOLDER_LABELS,
       ...raw.placeholder_labels,
     };
+  }
+  if (raw.time) {
+    manifest.time = raw.time as TimeDeclaration;
   }
   return manifest;
 }
