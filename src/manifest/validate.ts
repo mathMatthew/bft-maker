@@ -525,6 +525,55 @@ function checkTimeDeclaration(
       path: "time.weighting",
     });
   }
+
+  // Validate time_entities if provided
+  if (manifest.time.time_entities) {
+    const timeEntity = manifest.time.entity;
+
+    // Each declared time entity must exist
+    for (const te of manifest.time.time_entities) {
+      if (!entityMap.has(te)) {
+        errors.push({
+          rule: "time-entities-exist",
+          message: `time_entities references nonexistent entity "${te}"`,
+          path: "time.time_entities",
+        });
+      }
+    }
+
+    // The time entity itself must be included
+    if (!manifest.time.time_entities.includes(timeEntity)) {
+      errors.push({
+        rule: "time-entities-includes-time-entity",
+        message: `time_entities must include the time entity "${timeEntity}"`,
+        path: "time.time_entities",
+      });
+    }
+
+    // Each non-root time entity must be reachable from the time entity via M2O
+    const reachable = new Set<string>([timeEntity]);
+    const m2oRels = manifest.relationships.filter((r) => r.type === "many-to-one");
+    const queue = [timeEntity];
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      for (const rel of m2oRels) {
+        const [many, one] = rel.between;
+        if (many === current && !reachable.has(one)) {
+          reachable.add(one);
+          queue.push(one);
+        }
+      }
+    }
+    for (const te of manifest.time.time_entities) {
+      if (te !== timeEntity && !reachable.has(te)) {
+        errors.push({
+          rule: "time-entities-reachable",
+          message: `time_entities entry "${te}" is not reachable from "${timeEntity}" via many-to-one relationships`,
+          path: "time.time_entities",
+        });
+      }
+    }
+  }
 }
 
 // Rule: stock metrics require a time declaration and cannot be non-additive

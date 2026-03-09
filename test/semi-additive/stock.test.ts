@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { loadManifest } from "../../src/manifest/yaml.js";
 import { validate } from "../../src/manifest/validate.js";
 import { generate } from "../../src/codegen/generator.js";
-import { defaultSourceMapping, planTable } from "../../src/codegen/planner.js";
+import { defaultSourceMapping, planTable, suggestTimeDerivedEntities } from "../../src/codegen/planner.js";
 import type { Manifest } from "../../src/manifest/types.js";
 
 // ---------------------------------------------------------------------------
@@ -182,7 +182,7 @@ describe("stock metrics — planner", () => {
     assert.equal(plan.timePlan, undefined);
   });
 
-  it("detects time-derived entities via M2O relationships", () => {
+  it("uses explicit time_entities from manifest", () => {
     const m: Manifest = {
       entities: [
         { name: "Dept", role: "leaf", detail: true, estimated_rows: 3, metrics: [
@@ -196,14 +196,155 @@ describe("stock metrics — planner", () => {
         { name: "MonthQuarter", between: ["Month", "Quarter"], type: "many-to-one", estimated_links: 12 },
       ],
       propagations: [],
-      // Grain includes Dept and Month — just testing timePlan detection, not summarization
+      bft_tables: [{ name: "t", entities: ["Dept", "Month"], metrics: ["hc"] }],
+      time: { entity: "Month", column: "month_date", granularity: "month", time_entities: ["Month", "Quarter"] },
+    };
+    const plan = planTable(m, m.bft_tables[0], defaultSourceMapping(m));
+    assert.ok(plan.timePlan);
+    assert.ok(plan.timePlan!.timeDerivedEntities.has("Month"));
+    assert.ok(plan.timePlan!.timeDerivedEntities.has("Quarter"));
+    assert.ok(!plan.timePlan!.timeDerivedEntities.has("Dept"));
+  });
+
+  it("defaults to just the time entity when time_entities is omitted", () => {
+    const m: Manifest = {
+      entities: [
+        { name: "Dept", role: "leaf", detail: true, estimated_rows: 3, metrics: [
+          { name: "hc", type: "integer", nature: "additive", stock: true },
+        ]},
+        { name: "Month", role: "leaf", detail: true, estimated_rows: 12, metrics: [] },
+      ],
+      relationships: [
+        { name: "DeptMonth", between: ["Dept", "Month"], type: "many-to-many", estimated_links: 36 },
+      ],
+      propagations: [],
       bft_tables: [{ name: "t", entities: ["Dept", "Month"], metrics: ["hc"] }],
       time: { entity: "Month", column: "month_date", granularity: "month" },
     };
     const plan = planTable(m, m.bft_tables[0], defaultSourceMapping(m));
     assert.ok(plan.timePlan);
     assert.ok(plan.timePlan!.timeDerivedEntities.has("Month"));
-    assert.ok(plan.timePlan!.timeDerivedEntities.has("Quarter"));
+    assert.equal(plan.timePlan!.timeDerivedEntities.size, 1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// suggestTimeDerivedEntities (authoring helper)
+// ---------------------------------------------------------------------------
+
+describe("suggestTimeDerivedEntities", () => {
+  it("walks M2O chain in many→one direction", () => {
+    const rels = [
+      { name: "MonthQuarter", between: ["Month", "Quarter"] as [string, string], type: "many-to-one" as const, estimated_links: 12 },
+      { name: "QuarterYear", between: ["Quarter", "Year"] as [string, string], type: "many-to-one" as const, estimated_links: 4 },
+    ];
+    const result = suggestTimeDerivedEntities("Month", rels);
+    assert.ok(result.includes("Month"));
+    assert.ok(result.includes("Quarter"));
+    assert.ok(result.includes("Year"));
+  });
+
+  it("does not follow M2O in reverse (one→many) direction", () => {
+    const rels = [
+      // Region→Month: many regions per one month. Month is the "one" side.
+      { name: "RegionMonth", between: ["Region", "Month"] as [string, string], type: "many-to-one" as const, estimated_links: 5 },
+    ];
+    const result = suggestTimeDerivedEntities("Month", rels);
+    assert.ok(result.includes("Month"));
+    assert.ok(!result.includes("Region"),
+      "should not traverse M2O edge where time entity is on the one side");
+  });
+
+  it("does not follow same-direction chain into non-time entities", () => {
+    // Month→Quarter→Company: all M2O in same direction, but Company isn't time.
+    // suggestTimeDerivedEntities will include Company — that's OK because
+    // it's a suggestion that the user should review before storing in the manifest.
+    const rels = [
+      { name: "MonthQuarter", between: ["Month", "Quarter"] as [string, string], type: "many-to-one" as const, estimated_links: 12 },
+      { name: "QuarterCompany", between: ["Quarter", "Company"] as [string, string], type: "many-to-one" as const, estimated_links: 4 },
+    ];
+    const result = suggestTimeDerivedEntities("Month", rels);
+    // It suggests Company — the user removes it during manifest authoring
+    assert.ok(result.includes("Company"));
+    assert.equal(result.length, 3);
+  });
+
+  it("ignores many-to-many relationships", () => {
+    const rels = [
+      { name: "DeptMonth", between: ["Dept", "Month"] as [string, string], type: "many-to-many" as const, estimated_links: 36 },
+    ];
+    const result = suggestTimeDerivedEntities("Month", rels);
+    assert.deepEqual(result, ["Month"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Validation: time_entities
+// ---------------------------------------------------------------------------
+
+describe("stock metrics — time_entities validation", () => {
+  it("rejects time_entities referencing nonexistent entity", () => {
+    const manifest: Manifest = {
+      entities: [
+        { name: "Month", role: "leaf", detail: true, estimated_rows: 6, metrics: [] },
+      ],
+      relationships: [],
+      propagations: [],
+      bft_tables: [{ name: "t", entities: ["Month"], metrics: [] }],
+      time: { entity: "Month", column: "date", granularity: "month", time_entities: ["Month", "Missing"] },
+    };
+    const errors = validate(manifest);
+    assert.ok(errors.some((e) => e.rule === "time-entities-exist"));
+  });
+
+  it("rejects time_entities that omits the time entity", () => {
+    const manifest: Manifest = {
+      entities: [
+        { name: "Month", role: "leaf", detail: true, estimated_rows: 6, metrics: [] },
+        { name: "Quarter", role: "leaf", detail: true, estimated_rows: 4, metrics: [] },
+      ],
+      relationships: [
+        { name: "MQ", between: ["Month", "Quarter"], type: "many-to-one", estimated_links: 6 },
+      ],
+      propagations: [],
+      bft_tables: [{ name: "t", entities: ["Month"], metrics: [] }],
+      time: { entity: "Month", column: "date", granularity: "month", time_entities: ["Quarter"] },
+    };
+    const errors = validate(manifest);
+    assert.ok(errors.some((e) => e.rule === "time-entities-includes-time-entity"));
+  });
+
+  it("rejects time_entities not reachable via M2O from time entity", () => {
+    const manifest: Manifest = {
+      entities: [
+        { name: "Month", role: "leaf", detail: true, estimated_rows: 6, metrics: [] },
+        { name: "Region", role: "leaf", detail: true, estimated_rows: 5, metrics: [] },
+      ],
+      relationships: [],
+      propagations: [],
+      bft_tables: [{ name: "t", entities: ["Month"], metrics: [] }],
+      time: { entity: "Month", column: "date", granularity: "month", time_entities: ["Month", "Region"] },
+    };
+    const errors = validate(manifest);
+    assert.ok(errors.some((e) => e.rule === "time-entities-reachable"));
+  });
+
+  it("accepts valid time_entities", () => {
+    const manifest: Manifest = {
+      entities: [
+        { name: "Month", role: "leaf", detail: true, estimated_rows: 12, metrics: [] },
+        { name: "Quarter", role: "leaf", detail: true, estimated_rows: 4, metrics: [] },
+      ],
+      relationships: [
+        { name: "MQ", between: ["Month", "Quarter"], type: "many-to-one", estimated_links: 12 },
+      ],
+      propagations: [],
+      bft_tables: [{ name: "t", entities: ["Month"], metrics: [] }],
+      time: { entity: "Month", column: "date", granularity: "month", time_entities: ["Month", "Quarter"] },
+    };
+    const errors = validate(manifest);
+    const timeErrors = errors.filter((e) => e.rule.startsWith("time-entities"));
+    assert.equal(timeErrors.length, 0);
   });
 });
 

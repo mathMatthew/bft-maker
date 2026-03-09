@@ -30,6 +30,7 @@ time:
   entity: Month
   column: month_date
   granularity: month
+  time_entities: [Month]
 
 propagations: []
 

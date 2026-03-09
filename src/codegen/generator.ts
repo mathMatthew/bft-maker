@@ -1,6 +1,7 @@
 import type { Manifest } from "../manifest/types.js";
 import type {
   TablePlan,
+  TimePlan,
   MetricPlan,
   DimensionStrategy,
   SourceMapping,
@@ -217,7 +218,7 @@ function baseJoinSQL(
   allMetrics: MetricPlan[],
   sm: SourceMapping,
   prefix: string,
-  timePlan?: import("./types.js").TimePlan,
+  timePlan?: TimePlan,
 ): string {
   // Build collision-free aliases for all entities and relationships in the query
   const allNames = [...grainEntities, ...joinChain.map((l) => l.relationship)];
@@ -250,7 +251,10 @@ function baseJoinSQL(
     }
   }
 
-  // Include time column if time entity is in the grain and stock metrics exist
+  // Include time column for stock metric weighting in summarizationSQL.
+  // No collision risk: time column (e.g. month_date) is distinct from the
+  // entity id/label scheme ({entity}_id, {entity}_name).
+  // Survives to summarization via weightedSQL's SELECT *.
   if (timePlan && grainEntities.includes(timePlan.entity) && allMetrics.some((m) => m.stock)) {
     const timeAlias = aliasMap.get(timePlan.entity);
     if (timeAlias) {
@@ -409,7 +413,8 @@ function summarizationSQL(
   }
 
   // Determine if we're summarizing out a time-derived entity
-  const summarizedEntities = group.grain.filter((e) => !new Set(bftEntitiesInGrain).has(e));
+  const bftGrainSet = new Set(bftEntitiesInGrain);
+  const summarizedEntities = group.grain.filter((e) => !bftGrainSet.has(e));
   const summarizingTime = plan.timePlan != null &&
     summarizedEntities.some((e) => plan.timePlan!.timeDerivedEntities.has(e));
 
@@ -424,6 +429,8 @@ function summarizationSQL(
       if (tp.weighting === "equal") {
         selectCols.push(`AVG(${allocationExpr(metric, sm)}) AS ${q(metric.name)}`);
       } else {
+        // dateCol is only referenced inside SUM(), so it's evaluated per-row
+        // before aggregation — valid SQL even though it's not in GROUP BY.
         const dateCol = q(tp.column);
         const weight = `DATE_DIFF('day', ${dateCol}, ${dateCol} + ${tp.interval})`;
         selectCols.push(`SUM(${allocationExpr(metric, sm)} * ${weight}) / SUM(${weight}) AS ${q(metric.name)}`);

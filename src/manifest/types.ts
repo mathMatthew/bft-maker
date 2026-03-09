@@ -113,6 +113,8 @@ export interface TimeDeclaration {
   granularity: TimeGranularity;
   /** How to weight stock metrics: 'days' (day-weighted) or 'equal' (each period = 1). Default: 'days'. */
   weighting?: TimeWeighting;
+  /** Explicit list of all time-related entities (the time entity itself plus coarser grains like Quarter, Year). */
+  time_entities?: string[];
 }
 
 export interface Manifest {

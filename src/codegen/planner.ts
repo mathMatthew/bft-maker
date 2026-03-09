@@ -56,34 +56,33 @@ function pluralize(word: string): string {
 }
 
 /**
- * Find all entities reachable from the time entity via M2O relationships.
- * These are "time-derived" entities (e.g., Quarter, Year reachable from Month).
+ * Suggest time-derived entities by walking M2O relationships from the time
+ * entity in the many→one direction (between[0] → between[1]).
+ * This walks "up" the time hierarchy (e.g., Month → Quarter → Year).
+ *
+ * Used as an authoring helper — the result should be reviewed and stored
+ * explicitly in the manifest's time.time_entities field.
  */
-function findTimeDerivedEntities(
+export function suggestTimeDerivedEntities(
   timeEntity: string,
   relationships: Relationship[],
-): Set<string> {
+): string[] {
   const result = new Set<string>([timeEntity]);
   const m2oRels = relationships.filter((r) => r.type === "many-to-one");
 
-  // BFS: from time entity, follow M2O relationships in both directions
   const queue = [timeEntity];
   while (queue.length > 0) {
     const current = queue.shift()!;
     for (const rel of m2oRels) {
-      const [a, b] = rel.between;
-      if (a === current && !result.has(b)) {
-        result.add(b);
-        queue.push(b);
-      }
-      if (b === current && !result.has(a)) {
-        result.add(a);
-        queue.push(a);
+      const [many, one] = rel.between;
+      if (many === current && !result.has(one)) {
+        result.add(one);
+        queue.push(one);
       }
     }
   }
 
-  return result;
+  return [...result];
 }
 
 function granularityToInterval(granularity: string): string {
@@ -93,19 +92,20 @@ function granularityToInterval(granularity: string): string {
     case "month": return "INTERVAL 1 MONTH";
     case "quarter": return "INTERVAL 3 MONTH";
     case "year": return "INTERVAL 1 YEAR";
-    default: return "INTERVAL 1 MONTH";
+    default: throw new Error(`Unknown time granularity: "${granularity}"`);
   }
 }
 
 function buildTimePlan(manifest: Manifest): TimePlan | undefined {
   if (!manifest.time) return undefined;
   const time = manifest.time;
+  const timeEntities = time.time_entities ?? [time.entity];
   return {
     entity: time.entity,
     column: time.column,
     interval: granularityToInterval(time.granularity),
     weighting: time.weighting ?? "days",
-    timeDerivedEntities: findTimeDerivedEntities(time.entity, manifest.relationships),
+    timeDerivedEntities: new Set(timeEntities),
   };
 }
 
