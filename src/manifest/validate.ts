@@ -1,7 +1,8 @@
 import type { Manifest, Entity } from "./types.js";
-import { VALID_STRATEGIES } from "./types.js";
+import { VALID_STRATEGIES, VALID_TIME_GRANULARITIES, VALID_TIME_WEIGHTINGS } from "./types.js";
 import { buildMetricHomeMap, findMetricDef } from "./helpers.js";
 import type { MetricHome } from "./helpers.js";
+import { suggestTimeDerivedEntities } from "../codegen/planner.js";
 
 export interface ValidationError {
   rule: string;
@@ -28,6 +29,8 @@ export function validate(manifest: Manifest): ValidationError[] {
   checkTableEntities(manifest, entityMap, errors);
   checkTableMetrics(manifest, metricHome, errors);
   checkUnreachableMetrics(manifest, metricHome, errors);
+  checkTimeDeclaration(manifest, entityMap, errors);
+  checkStockMetrics(manifest, errors);
   return errors;
 }
 
@@ -480,6 +483,124 @@ function checkUnreachableMetrics(
           severity: "warning",
         });
       }
+    }
+  }
+}
+
+// Rule: time declaration must reference a valid entity and have valid granularity/weighting
+function checkTimeDeclaration(
+  manifest: Manifest,
+  entityMap: Map<string, Entity>,
+  errors: ValidationError[]
+): void {
+  if (!manifest.time) return;
+
+  if (!entityMap.has(manifest.time.entity)) {
+    errors.push({
+      rule: "time-entity-exists",
+      message: `Time declaration references nonexistent entity "${manifest.time.entity}"`,
+      path: "time.entity",
+    });
+  }
+
+  if (!manifest.time.column) {
+    errors.push({
+      rule: "time-column-required",
+      message: `Time declaration requires a column`,
+      path: "time.column",
+    });
+  }
+
+  if (!VALID_TIME_GRANULARITIES.has(manifest.time.granularity)) {
+    errors.push({
+      rule: "time-granularity-valid",
+      message: `Time declaration has invalid granularity "${manifest.time.granularity}" — must be one of: ${[...VALID_TIME_GRANULARITIES].join(", ")}`,
+      path: "time.granularity",
+    });
+  }
+
+  if (manifest.time.weighting && !VALID_TIME_WEIGHTINGS.has(manifest.time.weighting)) {
+    errors.push({
+      rule: "time-weighting-valid",
+      message: `Time declaration has invalid weighting "${manifest.time.weighting}" — must be one of: ${[...VALID_TIME_WEIGHTINGS].join(", ")}`,
+      path: "time.weighting",
+    });
+  }
+
+  // Validate time_entities if provided
+  if (manifest.time.time_entities) {
+    const timeEntity = manifest.time.entity;
+
+    // Each declared time entity must exist
+    for (const te of manifest.time.time_entities) {
+      if (!entityMap.has(te)) {
+        errors.push({
+          rule: "time-entities-exist",
+          message: `time_entities references nonexistent entity "${te}"`,
+          path: "time.time_entities",
+        });
+      }
+    }
+
+    // The time entity itself must be included
+    if (!manifest.time.time_entities.includes(timeEntity)) {
+      errors.push({
+        rule: "time-entities-includes-time-entity",
+        message: `time_entities must include the time entity "${timeEntity}"`,
+        path: "time.time_entities",
+      });
+    }
+
+    // Each non-root time entity must be reachable from the time entity via M2O
+    const reachable = new Set(suggestTimeDerivedEntities(timeEntity, manifest.relationships));
+    for (const te of manifest.time.time_entities) {
+      if (te !== timeEntity && !reachable.has(te)) {
+        errors.push({
+          rule: "time-entities-reachable",
+          message: `time_entities entry "${te}" is not reachable from "${timeEntity}" via many-to-one relationships`,
+          path: "time.time_entities",
+        });
+      }
+    }
+  }
+}
+
+// Rule: stock metrics require a time declaration and cannot be non-additive
+function checkStockMetrics(
+  manifest: Manifest,
+  errors: ValidationError[]
+): void {
+  const allMetrics: { name: string; def: { nature: string; stock?: boolean }; path: string }[] = [];
+  for (const entity of manifest.entities) {
+    for (const metric of entity.metrics) {
+      allMetrics.push({ name: metric.name, def: metric, path: `entities.${entity.name}.metrics.${metric.name}` });
+    }
+  }
+  for (const rel of manifest.relationships) {
+    if (rel.metrics) {
+      for (const metric of rel.metrics) {
+        allMetrics.push({ name: metric.name, def: metric, path: `relationships.${rel.name}.metrics.${metric.name}` });
+      }
+    }
+  }
+
+  for (const { name, def, path } of allMetrics) {
+    if (!def.stock) continue;
+
+    if (!manifest.time) {
+      errors.push({
+        rule: "stock-requires-time",
+        message: `Metric "${name}" is marked as stock but no time declaration exists in the manifest`,
+        path: `${path}.stock`,
+      });
+    }
+
+    if (def.nature === "non-additive") {
+      errors.push({
+        rule: "stock-not-non-additive",
+        message: `Metric "${name}" cannot be both stock and non-additive — non-additive metrics already use Sum/Sum on all dimensions`,
+        path: `${path}.stock`,
+      });
     }
   }
 }

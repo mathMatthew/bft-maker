@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as yaml from "js-yaml";
-import type { Manifest, MetricPropagation, PropagationEdge } from "./types.js";
+import type { Manifest, MetricPropagation, PropagationEdge, TimeDeclaration } from "./types.js";
 import { DEFAULT_PLACEHOLDER_LABELS } from "./types.js";
 
 /** What the YAML parser produces before normalization — metric can be a list. */
@@ -45,6 +45,22 @@ export function parseManifest(yamlString: string): Manifest {
       ...DEFAULT_PLACEHOLDER_LABELS,
       ...raw.placeholder_labels,
     };
+  }
+  if (raw.time) {
+    const t = raw.time as Record<string, unknown>;
+    if (typeof t !== "object" || t === null) {
+      throw new Error("Invalid manifest: time must be an object");
+    }
+    if (typeof t.entity !== "string" || !t.entity) {
+      throw new Error("Invalid manifest: time.entity must be a non-empty string");
+    }
+    if (typeof t.column !== "string" || !t.column) {
+      throw new Error("Invalid manifest: time.column must be a non-empty string");
+    }
+    if (typeof t.granularity !== "string" || !t.granularity) {
+      throw new Error("Invalid manifest: time.granularity must be a non-empty string");
+    }
+    manifest.time = t as unknown as TimeDeclaration;
   }
   return manifest;
 }

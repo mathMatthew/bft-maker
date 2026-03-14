@@ -1,8 +1,9 @@
-import type { Manifest, BftTable, Relationship, Strategy } from "../manifest/types.js";
+import type { Manifest, BftTable, Relationship, Strategy, TimeDeclaration } from "../manifest/types.js";
 import { buildMetricHomeMap, findMetricDef } from "../manifest/helpers.js";
 import type { MetricHome } from "../manifest/helpers.js";
 import type {
   TablePlan,
+  TimePlan,
   MetricPlan,
   DimensionStrategy,
   JoinLink,
@@ -55,6 +56,60 @@ function pluralize(word: string): string {
 }
 
 /**
+ * Suggest time-derived entities by walking M2O relationships from the time
+ * entity in the many→one direction (between[0] → between[1]).
+ * This walks "up" the time hierarchy (e.g., Month → Quarter → Year).
+ *
+ * Used as an authoring helper — the result should be reviewed and stored
+ * explicitly in the manifest's time.time_entities field.
+ */
+export function suggestTimeDerivedEntities(
+  timeEntity: string,
+  relationships: Relationship[],
+): string[] {
+  const result = new Set<string>([timeEntity]);
+  const m2oRels = relationships.filter((r) => r.type === "many-to-one");
+
+  const queue = [timeEntity];
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    for (const rel of m2oRels) {
+      const [many, one] = rel.between;
+      if (many === current && !result.has(one)) {
+        result.add(one);
+        queue.push(one);
+      }
+    }
+  }
+
+  return [...result];
+}
+
+function granularityToInterval(granularity: string): string {
+  switch (granularity) {
+    case "day": return "INTERVAL 1 DAY";
+    case "week": return "INTERVAL 7 DAY";
+    case "month": return "INTERVAL 1 MONTH";
+    case "quarter": return "INTERVAL 3 MONTH";
+    case "year": return "INTERVAL 1 YEAR";
+    default: throw new Error(`Unknown time granularity: "${granularity}"`);
+  }
+}
+
+function buildTimePlan(manifest: Manifest): TimePlan | undefined {
+  if (!manifest.time) return undefined;
+  const time = manifest.time;
+  const timeEntities = time.time_entities ?? [time.entity];
+  return {
+    entity: time.entity,
+    column: time.column,
+    interval: granularityToInterval(time.granularity),
+    weighting: time.weighting ?? "days",
+    timeDerivedEntities: new Set(timeEntities),
+  };
+}
+
+/**
  * Build a plan for one BFT table.
  */
 export function planTable(manifest: Manifest, table: BftTable, sourceMapping: SourceMapping): TablePlan {
@@ -70,13 +125,17 @@ export function planTable(manifest: Manifest, table: BftTable, sourceMapping: So
     const propagation = manifest.propagations.find((p) => p.metric === metricName);
     const sourceColumn = def.source_column ?? metricName;
 
-    return planMetric(metricName, sourceColumn, home, def.nature, propagation, bftGrainSet, bftGrain);
+    return planMetric(metricName, sourceColumn, home, def.nature, def.stock ?? false, propagation, bftGrainSet, bftGrain);
   });
 
   // Group metrics by computeGrain
   const grainGroups = buildGrainGroups(metrics, manifest.relationships, sourceMapping);
 
-  return { tableName: table.name, bftGrain, grainGroups, bftJoinChain };
+  // Build time plan if there are stock metrics in this table
+  const hasStock = metrics.some((m) => m.stock);
+  const timePlan = hasStock ? buildTimePlan(manifest) : undefined;
+
+  return { tableName: table.name, bftGrain, grainGroups, bftJoinChain, timePlan };
 }
 
 /**
@@ -87,6 +146,7 @@ function planMetric(
   sourceColumn: string,
   home: MetricHome,
   nature: "additive" | "non-additive",
+  stock: boolean,
   propagation: { path: { relationship: string; target_entity: string; strategy: Strategy; weight?: string }[] } | undefined,
   bftGrainSet: Set<string>,
   bftGrain: string[]
@@ -145,6 +205,7 @@ function planMetric(
     home,
     nature,
     sourceColumn,
+    stock,
     propagatedDimensions: allDimensions,
     computeGrain,
     reserveDimensions,

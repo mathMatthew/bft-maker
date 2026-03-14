@@ -1,0 +1,48 @@
+entities:
+  - name: Department
+    role: leaf
+    detail: true
+    estimated_rows: 3
+    metrics: []
+
+  - name: Month
+    role: leaf
+    detail: true
+    estimated_rows: 6
+    metrics: []
+
+relationships:
+  - name: DepartmentMonth
+    between: [Department, Month]
+    type: many-to-many
+    estimated_links: 18
+    source_table: department_months
+    metrics:
+      - name: revenue
+        type: currency
+        nature: additive
+      - name: headcount
+        type: integer
+        nature: additive
+        stock: true
+
+time:
+  entity: Month
+  column: month_date
+  granularity: month
+  time_entities: [Month]
+
+propagations: []
+
+bft_tables:
+  # Full grain: Department × Month — no summarization, values pass through
+  - name: dept_monthly
+    entities: [Department, Month]
+    metrics: [revenue, headcount]
+
+  # Summarized: Department only — Month is summarized out
+  # revenue: SUM (flow metric, correct)
+  # headcount: weighted average (stock metric, day-weighted)
+  - name: dept_summary
+    entities: [Department]
+    metrics: [revenue, headcount]

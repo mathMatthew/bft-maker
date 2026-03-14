@@ -1,6 +1,7 @@
 import type { Manifest } from "../manifest/types.js";
 import type {
   TablePlan,
+  TimePlan,
   MetricPlan,
   DimensionStrategy,
   SourceMapping,
@@ -94,7 +95,7 @@ function generateTableSQL(plan: TablePlan, manifest: Manifest, sm: SourceMapping
       metrics: bftMetrics,
       needsSummarization: false,
     };
-    sections.push(baseJoinSQL(plan.bftGrain, plan.bftJoinChain, allMetrics, sm, prefix));
+    sections.push(baseJoinSQL(plan.bftGrain, plan.bftJoinChain, allMetrics, sm, prefix, plan.timePlan));
     sections.push(weightedSQL(mergedGroup, sm, prefix));
     sections.push(assemblySQL(plan, allMetrics, sm, prefix, label));
   } else if (bftMetrics.length === 0) {
@@ -102,7 +103,7 @@ function generateTableSQL(plan: TablePlan, manifest: Manifest, sm: SourceMapping
     if (sumGroups.length === 1) {
       // Single summarization group: standard summarization pipeline
       const group = sumGroups[0];
-      sections.push(baseJoinSQL(group.grain, group.joinChain, allMetrics, sm, prefix));
+      sections.push(baseJoinSQL(group.grain, group.joinChain, allMetrics, sm, prefix, plan.timePlan));
       sections.push(weightedSQL(group, sm, prefix));
       sections.push(summarizationSQL(plan, group, allMetrics, sm, prefix));
       sections.push(assemblySQL(plan, allMetrics, sm, prefix, label));
@@ -110,7 +111,7 @@ function generateTableSQL(plan: TablePlan, manifest: Manifest, sm: SourceMapping
       // Multiple summarization groups: per-group pipelines + combined assembly
       for (const group of sumGroups) {
         const gPrefix = `${prefix}_${group.id}`;
-        sections.push(baseJoinSQL(group.grain, group.joinChain, group.metrics, sm, gPrefix));
+        sections.push(baseJoinSQL(group.grain, group.joinChain, group.metrics, sm, gPrefix, plan.timePlan));
         sections.push(weightedSQL(group, sm, gPrefix));
         sections.push(summarizationSQL(plan, group, group.metrics, sm, gPrefix));
       }
@@ -125,11 +126,11 @@ function generateTableSQL(plan: TablePlan, manifest: Manifest, sm: SourceMapping
       metrics: bftMetrics,
       needsSummarization: false,
     };
-    sections.push(baseJoinSQL(plan.bftGrain, plan.bftJoinChain, bftMetrics, sm, prefix));
+    sections.push(baseJoinSQL(plan.bftGrain, plan.bftJoinChain, bftMetrics, sm, prefix, plan.timePlan));
     sections.push(weightedSQL(mergedBftGroup, sm, prefix));
     for (const group of sumGroups) {
       const gPrefix = `${prefix}_${group.id}`;
-      sections.push(baseJoinSQL(group.grain, group.joinChain, group.metrics, sm, gPrefix));
+      sections.push(baseJoinSQL(group.grain, group.joinChain, group.metrics, sm, gPrefix, plan.timePlan));
       sections.push(weightedSQL(group, sm, gPrefix));
       sections.push(summarizationSQL(plan, group, group.metrics, sm, gPrefix));
     }
@@ -216,7 +217,8 @@ function baseJoinSQL(
   joinChain: JoinLink[],
   allMetrics: MetricPlan[],
   sm: SourceMapping,
-  prefix: string
+  prefix: string,
+  timePlan?: TimePlan,
 ): string {
   // Build collision-free aliases for all entities and relationships in the query
   const allNames = [...grainEntities, ...joinChain.map((l) => l.relationship)];
@@ -246,6 +248,17 @@ function baseJoinSQL(
       } else {
         selectCols.push(`${alias}.${q(m.name)}`);
       }
+    }
+  }
+
+  // Include time column for stock metric weighting in summarizationSQL.
+  // No collision risk: time column (e.g. month_date) is distinct from the
+  // entity id/label scheme ({entity}_id, {entity}_name).
+  // Survives to summarization via weightedSQL's SELECT *.
+  if (timePlan && grainEntities.includes(timePlan.entity) && allMetrics.some((m) => m.stock)) {
+    const timeAlias = aliasMap.get(timePlan.entity);
+    if (timeAlias) {
+      selectCols.push(`${timeAlias}.${q(timePlan.column)}`);
     }
   }
 
@@ -399,11 +412,29 @@ function summarizationSQL(
     selectCols.push(nameCol);
   }
 
+  // Determine if we're summarizing out a time-derived entity
+  const bftGrainSet = new Set(bftEntitiesInGrain);
+  const summarizedEntities = group.grain.filter((e) => !bftGrainSet.has(e));
+  const summarizingTime = plan.timePlan != null &&
+    summarizedEntities.some((e) => plan.timePlan!.timeDerivedEntities.has(e));
+
   // Metric expressions: SUM with allocation weights where applicable
   for (const metric of metrics) {
     if (metric.nature === "non-additive") {
       selectCols.push(`SUM(${q(metric.name)}) AS ${q(metric.name)}`);
       selectCols.push(`SUM(${sumOverSumWeightExpr(metric)}) AS ${q(metric.name + "_weight")}`);
+    } else if (metric.stock && summarizingTime) {
+      // Stock metric with time being summarized out: use weighted average
+      const tp = plan.timePlan!;
+      if (tp.weighting === "equal") {
+        selectCols.push(`AVG(${allocationExpr(metric, sm)}) AS ${q(metric.name)}`);
+      } else {
+        // dateCol is only referenced inside SUM(), so it's evaluated per-row
+        // before aggregation — valid SQL even though it's not in GROUP BY.
+        const dateCol = q(tp.column);
+        const weight = `DATE_DIFF('day', ${dateCol}, ${dateCol} + ${tp.interval})`;
+        selectCols.push(`SUM(${allocationExpr(metric, sm)} * ${weight}) / SUM(${weight}) AS ${q(metric.name)}`);
+      }
     } else {
       // allocationExpr returns "metric * 1.0" for non-allocated metrics,
       // "metric * 1.0 / weight" for allocated ones — handles all additive cases.
@@ -810,9 +841,17 @@ function validationSQL(plan: TablePlan, allMetrics: MetricPlan[], sm: SourceMapp
   const hasSummarization = plan.grainGroups.some((g) => g.needsSummarization);
   let n = 1;
 
+  // Determine if time is being summarized out of this table
+  const bftGrainSet = new Set(plan.bftGrain);
+  const summarizesTime = plan.timePlan != null && hasSummarization &&
+    plan.grainGroups.some((g) => g.needsSummarization &&
+      g.grain.some((e) => plan.timePlan!.timeDerivedEntities.has(e) && !bftGrainSet.has(e)));
+
   // V: SUM check for each additive metric
   for (const metric of allMetrics) {
     if (metric.nature === "non-additive") continue;
+    // Stock metrics with time summarized out won't match source SUM (intentionally)
+    if (metric.stock && summarizesTime) continue;
 
     const home = homeEntity(metric);
     // For relationship metrics, the source table is the junction table
@@ -901,46 +940,52 @@ function validationSQL(plan: TablePlan, allMetrics: MetricPlan[], sm: SourceMapp
 // ---------------------------------------------------------------------------
 
 function generateRunScript(tableNames: string[]): string {
-  const lines = [
-    `#!/bin/bash`,
-    `# Generated by bft-maker`,
-    `set -euo pipefail`,
-    ``,
-    `SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"`,
-    `cd "$SCRIPT_DIR"`,
-    ``,
+  // Build file list with numbered prefixes matching emitFiles output
+  const sqlFiles = [
+    "00_load_data.sql",
+    ...tableNames.map((n, i) => `${String(i + 1).padStart(2, "0")}_${n}.sql`),
   ];
+  const fileListPy = sqlFiles
+    .map((f) => `os.path.join(script_dir, '${f}')`)
+    .join(", ");
 
-  // Python runner (same approach as the hand-written run.sh)
-  const fileList = [
-    `'$SCRIPT_DIR/00_load_data.sql'`,
-    ...tableNames.map((n) => `'$SCRIPT_DIR/${n}.sql'`),
-  ];
+  // Use a heredoc with stdin arg to pass SCRIPT_DIR cleanly into python
+  return `#!/bin/bash
+# Generated by bft-maker
+set -euo pipefail
 
-  lines.push(`echo "Running BFT SQL..."`);
-  lines.push(`python3 -c "`);
-  lines.push(`import duckdb, sys`);
-  lines.push(`con = duckdb.connect()`);
-  lines.push(`files = [${fileList.join(", ")}]`);
-  lines.push(`all_pass = True`);
-  lines.push(`for f in files:`);
-  lines.push(`    print(f'\\n=== {f} ===')`);
-  lines.push(`    sql = open(f).read()`);
-  lines.push(`    for stmt in [s.strip() for s in sql.split(';') if s.strip()]:`);
-  lines.push(`        lines = [l for l in stmt.split('\\n') if l.strip() and not l.strip().startswith('--')]`);
-  lines.push(`        if not lines: continue`);
-  lines.push(`        result = con.execute(stmt)`);
-  lines.push(`        if lines[0].strip().split()[0].upper() == 'SELECT':`);
-  lines.push(`            for row in result.fetchall():`);
-  lines.push(`                cols = [d[0] for d in result.description]`);
-  lines.push(`                d = dict(zip(cols, row))`);
-  lines.push(`                status = 'PASS' if 'PASS' in str(d.get('result','')) else 'FAIL'`);
-  lines.push(`                if status == 'FAIL': all_pass = False`);
-  lines.push(`                print(f\"  {d['test']}: {d['result']}\")`);
-  lines.push(`print()`);
-  lines.push(`if all_pass: print('All validations passed.')`);
-  lines.push(`else: print('SOME VALIDATIONS FAILED'); sys.exit(1)`);
-  lines.push(`"`);
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-  return lines.join("\n");
+echo "Running BFT SQL..."
+python3 - "$SCRIPT_DIR" <<'PYEOF'
+import duckdb, os, sys
+
+script_dir = sys.argv[1]
+con = duckdb.connect()
+files = [${fileListPy}]
+all_pass = True
+for f in files:
+    print(f'\\n=== {f} ===')
+    sql = open(f).read()
+    for stmt in [s.strip() for s in sql.split(';') if s.strip()]:
+        lines = [l for l in stmt.split('\\n') if l.strip() and not l.strip().startswith('--')]
+        if not lines:
+            continue
+        result = con.execute(stmt)
+        if lines[0].strip().split()[0].upper() == 'SELECT':
+            for row in result.fetchall():
+                cols = [d[0] for d in result.description]
+                d = dict(zip(cols, row))
+                status = 'PASS' if 'PASS' in str(d.get('result', '')) else 'FAIL'
+                if status == 'FAIL':
+                    all_pass = False
+                print(f"  {d['test']}: {d['result']}")
+print()
+if all_pass:
+    print('All validations passed.')
+else:
+    print('SOME VALIDATIONS FAILED')
+    sys.exit(1)
+PYEOF
+`;
 }
