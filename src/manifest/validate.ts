@@ -2,6 +2,7 @@ import type { Manifest, Entity } from "./types.js";
 import { VALID_STRATEGIES, VALID_TIME_GRANULARITIES, VALID_TIME_WEIGHTINGS } from "./types.js";
 import { buildMetricHomeMap, findMetricDef } from "./helpers.js";
 import type { MetricHome } from "./helpers.js";
+import { suggestTimeDerivedEntities } from "../codegen/planner.js";
 
 export interface ValidationError {
   rule: string;
@@ -551,19 +552,7 @@ function checkTimeDeclaration(
     }
 
     // Each non-root time entity must be reachable from the time entity via M2O
-    const reachable = new Set<string>([timeEntity]);
-    const m2oRels = manifest.relationships.filter((r) => r.type === "many-to-one");
-    const queue = [timeEntity];
-    while (queue.length > 0) {
-      const current = queue.shift()!;
-      for (const rel of m2oRels) {
-        const [many, one] = rel.between;
-        if (many === current && !reachable.has(one)) {
-          reachable.add(one);
-          queue.push(one);
-        }
-      }
-    }
+    const reachable = new Set(suggestTimeDerivedEntities(timeEntity, manifest.relationships));
     for (const te of manifest.time.time_entities) {
       if (te !== timeEntity && !reachable.has(te)) {
         errors.push({
