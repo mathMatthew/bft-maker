@@ -1,7 +1,7 @@
 import * as clack from "@clack/prompts";
 import ansiEscapes from "ansi-escapes";
 import chalk from "chalk";
-import type { Entity, Relationship, MetricDef } from "../../manifest/types.js";
+import type { Entity, Relationship, MetricDef, TimeDeclaration, TimeGranularity, TimeWeighting } from "../../manifest/types.js";
 import type { WizardState } from "../state.js";
 import {
   introspect,
@@ -41,6 +41,7 @@ function classificationTag(
   const desig = getColumnDesignation(model, tableName, col, pk);
   if (!desig) return chalk.dim("attr".padEnd(width));
   if (desig === "key") return chalk.yellow("key".padEnd(width));
+  if (desig === "date") return chalk.blue("date".padEnd(width));
   if (desig === "additive") return chalk.green("additive".padEnd(width));
   if (desig === "non-additive") return chalk.magenta("non-addit.".padEnd(width));
   if (desig === "metric") return chalk.green("metric?".padEnd(width));
@@ -387,6 +388,9 @@ function getColumnDesignation(
     return metric.nature ?? "metric";
   }
 
+  // Date column
+  if (col.isDate) return "date";
+
   return "";
 }
 
@@ -605,6 +609,7 @@ async function editTableDetails(model: DetectedModel, targetTable?: string): Pro
 async function askMetricNature(
   m: { table: string; column: string; type: string; nature?: "additive" | "non-additive" },
   model: DetectedModel,
+  hasTime = false,
 ): Promise<boolean | null> {
   const table = model.tables.find((t) => t.name === m.table);
   const seen = new Set<string>();
@@ -638,6 +643,21 @@ async function askMetricNature(
     m.nature = undefined;
   } else {
     m.nature = nature as "additive" | "non-additive";
+
+    // If time is declared and this metric is additive, ask stock vs flow now
+    if (nature === "additive" && hasTime) {
+      const isStock = await clack.select({
+        message: `Is ${m.table}.${m.column} a stock or flow metric?`,
+        options: [
+          { value: "flow", label: "Flow", hint: "accumulates over time — SUM is correct" },
+          { value: "stock", label: "Stock", hint: "point-in-time — needs weighted average" },
+        ],
+      });
+      if (clack.isCancel(isStock)) return null;
+      if (isStock === "stock") {
+        (m as Record<string, unknown>)._stock = true;
+      }
+    }
   }
   return true;
 }
@@ -956,27 +976,111 @@ export async function runDataModelStep(
     return { ok: false, model };
   }
 
+  // ── Time dimension detection (before metric classification) ─────────
+  // Find DATE columns on entity and junction tables
+  const dateColumns: { table: string; column: string }[] = [];
+  for (const table of model.tables) {
+    const isIncluded =
+      model.entities.some((e) => e.name === table.name) ||
+      model.junctions.some((j) => j.name === table.name);
+    if (!isIncluded) continue;
+    for (const col of table.columns) {
+      if (col.isDate) {
+        dateColumns.push({ table: table.name, column: col.name });
+      }
+    }
+  }
+
+  if (dateColumns.length > 0) {
+    clack.log.message("");
+    clack.log.step("Time dimension");
+    clack.log.message(
+      chalk.dim("  If your data has a time grain (e.g. months, days), stock metrics\n") +
+      chalk.dim("  like headcount can use weighted averages instead of SUM."),
+    );
+
+    const hasTimeSel = await clack.select({
+      message: "Does this data have a time dimension?",
+      options: [
+        { value: "no", label: "No" },
+        { value: "yes", label: "Yes", hint: "e.g. monthly/daily/quarterly data" },
+      ],
+    });
+    if (clack.isCancel(hasTimeSel)) return { ok: false, model };
+
+    if (hasTimeSel === "yes") {
+      const timeCol = await clack.select({
+        message: "Which date column is the time grain?",
+        options: dateColumns.map((dc) => ({
+          value: `${dc.table}::${dc.column}`,
+          label: `${dc.table}.${dc.column}`,
+        })),
+      });
+      if (clack.isCancel(timeCol)) return { ok: false, model };
+
+      const [timeTable, timeColumn] = (timeCol as string).split("::");
+      const timeEntity = model.entities.find((e) => e.name === timeTable);
+      const timeEntityName = timeEntity?.name ?? timeTable;
+
+      const granularity = await clack.select({
+        message: "What does each row represent?",
+        options: [
+          { value: "day", label: "Day" },
+          { value: "week", label: "Week" },
+          { value: "month", label: "Month" },
+          { value: "quarter", label: "Quarter" },
+          { value: "year", label: "Year" },
+        ],
+      });
+      if (clack.isCancel(granularity)) return { ok: false, model };
+
+      const weighting = await clack.select({
+        message: "How should stock metrics be weighted?",
+        options: [
+          { value: "days", label: "Day-weighted", hint: "weight by calendar days in period" },
+          { value: "equal", label: "Equal", hint: "each period counts the same (plain AVG)" },
+        ],
+      });
+      if (clack.isCancel(weighting)) return { ok: false, model };
+
+      state.time = {
+        entity: timeEntityName,
+        column: timeColumn,
+        granularity: granularity as TimeGranularity,
+        weighting: weighting as TimeWeighting,
+        time_entities: [timeEntityName],
+      };
+
+      clack.log.success(
+        `Time: ${timeEntityName}.${timeColumn} (${granularity as string}, ${weighting as string}-weighted)`,
+      );
+    }
+  }
+
   // ── Build state from the confirmed model ──────────────────
 
-  // Show metric classifications and let user accept or walk through
+  // Remove skipped metrics (nature cleared) and build metricDefs
+  model.metrics = model.metrics.filter((m) => m.nature);
+
+  // Show metric classifications and let user accept or walk through.
+  // When time is declared, always walk through so stock/flow can be asked per metric.
   const metricDefs: Map<string, MetricDef[]> = new Map();
+  const timeEnabled = state.time !== undefined;
 
   if (model.metrics.length > 0) {
     const unclassified = model.metrics.filter((m) => !m.nature);
     const classified = model.metrics.filter((m) => m.nature);
 
     if (unclassified.length > 0) {
-      // Some metrics have no guess — must walk through those
       clack.log.message("");
       clack.log.step("Unclassified metrics");
       for (const m of unclassified) {
-        const result = await askMetricNature(m, model);
+        const result = await askMetricNature(m, model, timeEnabled);
         if (result === null) return { ok: false, model };
       }
     }
 
     if (classified.length > 0) {
-      // Show auto-classifications and offer review
       clack.log.message("");
       clack.log.step("Metric classifications");
       for (const m of classified) {
@@ -984,32 +1088,39 @@ export async function runDataModelStep(
         clack.log.message(`  ${m.table}.${m.column} → ${tag}`);
       }
 
-      const review = await clack.select({
-        message: `${classified.length} metrics auto-classified. Review?`,
-        options: [
-          { value: "accept", label: "Looks good" },
-          { value: "walk", label: "Walk me through each one" },
-        ],
-      });
-      if (clack.isCancel(review)) return { ok: false, model };
+      // When time is enabled, walk through all so stock/flow is asked for each additive metric.
+      let doWalk = timeEnabled;
+      if (!doWalk) {
+        const review = await clack.select({
+          message: `${classified.length} metrics auto-classified. Review?`,
+          options: [
+            { value: "accept", label: "Looks good" },
+            { value: "walk", label: "Walk me through each one" },
+          ],
+        });
+        if (clack.isCancel(review)) return { ok: false, model };
+        doWalk = review === "walk";
+      }
 
-      if (review === "walk") {
+      if (doWalk) {
         for (const m of classified) {
-          const result = await askMetricNature(m, model);
+          const result = await askMetricNature(m, model, timeEnabled);
           if (result === null) return { ok: false, model };
         }
       }
     }
   }
 
-  // Remove skipped metrics (nature cleared) and build metricDefs
-  model.metrics = model.metrics.filter((m) => m.nature);
+  // ── Build MetricDefs from classified metrics ───────────────
   for (const m of model.metrics) {
     const def: MetricDef = {
       name: m.column,
       type: inferMetricType(m.type),
       nature: m.nature!,
     };
+    if ((m as Record<string, unknown>)._stock) {
+      def.stock = true;
+    }
     const existing = metricDefs.get(m.table) ?? [];
     existing.push(def);
     metricDefs.set(m.table, existing);
