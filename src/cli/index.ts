@@ -12,7 +12,7 @@ function usage(): never {
   bft-maker generate --manifest <path> [--output <dir>]
   bft-maker validate --manifest <path>
   bft-maker introspect --db <duckdb-path>
-  bft-maker wizard --db <duckdb-path> [--output <path>]`);
+  bft-maker wizard --db <duckdb-path> [--manifest <path>] [--output <path>]`);
   process.exit(1);
 }
 
@@ -51,6 +51,7 @@ function parseArgs(argv: string[]): { command: string; manifest: string; output:
 
   return { command, manifest, output, db };
 }
+
 
 function runValidate(manifestPath: string): void {
   const manifest = loadManifest(manifestPath);
@@ -166,7 +167,11 @@ function runGenerate(manifestPath: string, outputDir: string): void {
 async function main(): Promise<void> {
   const { command, manifest, output, db } = parseArgs(process.argv);
   if (command === "wizard") {
-    await runWizard({ dbPath: db, outputPath: output !== "./out" ? output : undefined });
+    await runWizard({
+      dbPath: db,
+      outputPath: output !== "./out" ? output : undefined,
+      manifestPath: manifest || undefined,
+    });
   } else if (command === "introspect") {
     await runIntrospect(db);
   } else if (command === "validate") {
