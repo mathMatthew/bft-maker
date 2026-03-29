@@ -61,6 +61,7 @@ export interface ColumnInfo {
   name: string;
   type: string;
   isNumeric: boolean;
+  isDate: boolean;
   isUnique: boolean;
 }
 
@@ -108,7 +109,7 @@ export interface DetectedModel {
   /** All FK references found. */
   allFKs: FKRef[];
   /** Metric candidates: numeric non-PK non-FK columns. */
-  metrics: { table: string; column: string; type: string; nature?: "additive" | "non-additive" }[];
+  metrics: { table: string; column: string; type: string; nature?: "additive" | "non-additive"; stock?: boolean }[];
 }
 
 /* ------------------------------------------------------------------ */
@@ -124,6 +125,16 @@ const NUMERIC_TYPES = new Set([
 function isNumericType(duckdbType: string): boolean {
   const base = duckdbType.split("(")[0].toUpperCase().trim();
   return NUMERIC_TYPES.has(base);
+}
+
+const DATE_TYPES = new Set([
+  "DATE", "DATE32", "TIMESTAMP", "TIMESTAMP_S", "TIMESTAMP_MS",
+  "TIMESTAMP_NS", "TIMESTAMP_TZ", "TIMESTAMPTZ",
+]);
+
+export function isDateType(duckdbType: string): boolean {
+  const base = duckdbType.split("(")[0].toUpperCase().trim();
+  return DATE_TYPES.has(base);
 }
 
 /* ------------------------------------------------------------------ */
@@ -502,6 +513,7 @@ export async function introspect(dbPath: string): Promise<DetectedModel> {
           name: colName,
           type: colType,
           isNumeric: isNumericType(colType),
+          isDate: isDateType(colType),
           isUnique,
         });
       }

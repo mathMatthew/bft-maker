@@ -607,7 +607,7 @@ async function editTableDetails(model: DetectedModel, targetTable?: string): Pro
  * Returns null on cancel.
  */
 async function askMetricNature(
-  m: { table: string; column: string; type: string; nature?: "additive" | "non-additive" },
+  m: { table: string; column: string; type: string; nature?: "additive" | "non-additive"; stock?: boolean },
   model: DetectedModel,
   hasTime = false,
 ): Promise<boolean | null> {
@@ -655,7 +655,7 @@ async function askMetricNature(
       });
       if (clack.isCancel(isStock)) return null;
       if (isStock === "stock") {
-        (m as Record<string, unknown>)._stock = true;
+        m.stock = true;
       }
     }
   }
@@ -1018,6 +1018,7 @@ export async function runDataModelStep(
       });
       if (clack.isCancel(timeCol)) return { ok: false, model };
 
+      // "::" is used as a separator since DuckDB identifiers cannot contain it
       const [timeTable, timeColumn] = (timeCol as string).split("::");
       const timeEntity = model.entities.find((e) => e.name === timeTable);
       const timeEntityName = timeEntity?.name ?? timeTable;
@@ -1118,7 +1119,7 @@ export async function runDataModelStep(
       type: inferMetricType(m.type),
       nature: m.nature!,
     };
-    if ((m as Record<string, unknown>)._stock) {
+    if (m.stock) {
       def.stock = true;
     }
     const existing = metricDefs.get(m.table) ?? [];
