@@ -7,6 +7,7 @@ import type {
   BftTable,
   Strategy,
   Manifest,
+  TimeDeclaration,
 } from "../manifest/types.js";
 
 /* ------------------------------------------------------------------ */
@@ -69,6 +70,9 @@ export interface WizardState {
 
   /* Step 4 — BFT table definitions */
   bftTables: BftTable[];
+
+  /* Optional time dimension declaration */
+  time?: TimeDeclaration;
 }
 
 /* ------------------------------------------------------------------ */
@@ -320,12 +324,69 @@ export function allMetricDefs(state: WizardState): MetricDef[] {
 /* ------------------------------------------------------------------ */
 
 export function buildManifest(state: WizardState): Manifest {
-  return {
+  const manifest: Manifest = {
     entities: state.entities,
     relationships: state.relationships,
     propagations: extractPropagations(state),
     bft_tables: state.bftTables,
   };
+  if (state.time) {
+    manifest.time = state.time;
+  }
+  return manifest;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Convert an existing Manifest to WizardState                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Load an existing manifest into WizardState so the wizard can review
+ * and edit it. Skips the data-model step — opens hub at strategy-matrix.
+ */
+export function manifestToState(manifest: Manifest): WizardState {
+  const { grid, metricNames, entityNames } = initGrid(
+    manifest.entities,
+    manifest.relationships,
+  );
+  const weights = new Map<string, string>();
+
+  for (const prop of manifest.propagations) {
+    const metricRow = metricNames.indexOf(prop.metric);
+    if (metricRow === -1) continue;
+
+    for (const edge of prop.path) {
+      const entityCol = entityNames.indexOf(edge.target_entity);
+      if (entityCol === -1) continue;
+
+      const cell = grid[metricRow][entityCol];
+      if (cell.value === "home" || cell.value === "unreachable") continue;
+
+      grid[metricRow][entityCol] = { ...cell, value: edge.strategy };
+
+      if (
+        (edge.strategy === "allocation" || edge.strategy === "sum_over_sum") &&
+        edge.weight
+      ) {
+        weights.set(`${prop.metric}:${edge.target_entity}`, edge.weight);
+      }
+    }
+  }
+
+  const state: WizardState = {
+    step: "strategy-matrix",
+    entities: manifest.entities,
+    relationships: manifest.relationships,
+    grid,
+    metricNames,
+    entityNames,
+    weights,
+    bftTables: manifest.bft_tables,
+  };
+  if (manifest.time) {
+    state.time = manifest.time;
+  }
+  return state;
 }
 
 /* ------------------------------------------------------------------ */

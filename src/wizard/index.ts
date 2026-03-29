@@ -6,6 +6,7 @@ import {
   collectMetrics,
   cellsNeedingWeights,
   allMetricDefs,
+  manifestToState,
   type WizardState,
 } from "./state.js";
 import { runDataModelStep, type DataModelResult } from "./steps/data-model.js";
@@ -14,7 +15,7 @@ import { runStrategyMatrixStep } from "./steps/strategy-matrix.js";
 import { runWeightsStep } from "./steps/weights.js";
 import { runTablesStep } from "./steps/tables.js";
 import { validate } from "../manifest/validate.js";
-import { serializeManifest, saveManifest } from "../manifest/yaml.js";
+import { loadManifest, serializeManifest, saveManifest } from "../manifest/yaml.js";
 import { saveDraft, loadDraft, deleteDraft } from "./draft.js";
 
 /* ------------------------------------------------------------------ */
@@ -26,6 +27,8 @@ export interface WizardOptions {
   dbPath: string;
   /** If set, write the manifest to this path. Otherwise print to stdout. */
   outputPath?: string;
+  /** If set, load this manifest into the wizard instead of building from scratch. */
+  manifestPath?: string;
 }
 
 export async function runWizard(opts: WizardOptions): Promise<void> {
@@ -41,38 +44,45 @@ export async function runWizard(opts: WizardOptions): Promise<void> {
   clack.intro("bft-maker wizard");
   clack.log.info("Press q to quit at any prompt.");
 
-  // ── Check for saved draft ──────────────────────────────────
+  // ── Load manifest or check for saved draft ────────────────
 
   let state = createInitialState();
   let hasDataModel = false;
   let savedDetectedModel: DetectedModel | undefined;
 
-  const draft = loadDraft(opts.dbPath);
-  if (draft) {
-    const ago = timeSince(draft.savedAt);
-    const hint = draft.state.entities.length > 0
-      ? statusSummary(draft.state)
-      : "data model in progress";
-    const resume = await clack.select({
-      message: `Found saved progress from ${ago}. Resume?`,
-      options: [
-        { value: "resume", label: "Resume", hint },
-        { value: "fresh", label: "Start fresh" },
-      ],
-    });
+  if (opts.manifestPath) {
+    const manifest = loadManifest(opts.manifestPath);
+    state = manifestToState(manifest);
+    hasDataModel = true;
+    clack.log.info(`Loaded manifest from ${opts.manifestPath}`);
+  } else {
+    const draft = loadDraft(opts.dbPath);
+    if (draft) {
+      const ago = timeSince(draft.savedAt);
+      const hint = draft.state.entities.length > 0
+        ? statusSummary(draft.state)
+        : "data model in progress";
+      const resume = await clack.select({
+        message: `Found saved progress from ${ago}. Resume?`,
+        options: [
+          { value: "resume", label: "Resume", hint },
+          { value: "fresh", label: "Start fresh" },
+        ],
+      });
 
-    if (clack.isCancel(resume)) {
-      cleanup();
-      clack.outro("Wizard cancelled.");
-      return;
-    }
+      if (clack.isCancel(resume)) {
+        cleanup();
+        clack.outro("Wizard cancelled.");
+        return;
+      }
 
-    if (resume === "resume") {
-      state = draft.state;
-      savedDetectedModel = draft.detectedModel;
-      hasDataModel = state.entities.length > 0;
-    } else {
-      deleteDraft(opts.dbPath);
+      if (resume === "resume") {
+        state = draft.state;
+        savedDetectedModel = draft.detectedModel;
+        hasDataModel = state.entities.length > 0;
+      } else {
+        deleteDraft(opts.dbPath);
+      }
     }
   }
 
@@ -123,6 +133,7 @@ export async function runWizard(opts: WizardOptions): Promise<void> {
         state.entityNames = [];
         state.weights = new Map();
         state.bftTables = [];
+        state.time = undefined;
         const result = await runDataModelStep(state, opts.dbPath, savedDetectedModel);
         savedDetectedModel = result.model;
         ok = result.ok;

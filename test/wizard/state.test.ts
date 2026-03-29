@@ -12,10 +12,11 @@ import {
   extractPropagations,
   cellsNeedingWeights,
   buildManifest,
+  manifestToState,
   type GridCell,
   type WizardState,
 } from "../../src/wizard/state.js";
-import type { Entity, Relationship } from "../../src/manifest/types.js";
+import type { Entity, Manifest, Relationship } from "../../src/manifest/types.js";
 
 /* ------------------------------------------------------------------ */
 /*  Test fixtures                                                     */
@@ -411,5 +412,117 @@ describe("buildManifest", () => {
     assert.equal(manifest.relationships.length, 2);
     assert.equal(manifest.bft_tables.length, 1);
     assert.equal(manifest.bft_tables[0].name, "test_table");
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  manifestToState                                                   */
+/* ------------------------------------------------------------------ */
+
+function makeManifest(): Manifest {
+  const { entities, relationships } = studentClassProfessor();
+  return {
+    entities,
+    relationships,
+    propagations: [
+      {
+        metric: "tuition_paid",
+        path: [
+          { relationship: "Enrollment", target_entity: "Class", strategy: "allocation", weight: "enrollment_share" },
+          { relationship: "Assignment", target_entity: "Professor", strategy: "elimination" },
+        ],
+      },
+      {
+        metric: "salary",
+        path: [
+          { relationship: "Assignment", target_entity: "Class", strategy: "sum_over_sum", weight: "class_weight" },
+        ],
+      },
+    ],
+    bft_tables: [
+      { name: "main_bft", entities: ["Student", "Class", "Professor"], metrics: ["tuition_paid", "salary"] },
+    ],
+  };
+}
+
+describe("manifestToState", () => {
+  it("sets step to strategy-matrix", () => {
+    const state = manifestToState(makeManifest());
+    assert.equal(state.step, "strategy-matrix");
+  });
+
+  it("copies entities, relationships, and bftTables", () => {
+    const manifest = makeManifest();
+    const state = manifestToState(manifest);
+    assert.equal(state.entities.length, 3);
+    assert.equal(state.relationships.length, 2);
+    assert.equal(state.bftTables.length, 1);
+    assert.equal(state.bftTables[0].name, "main_bft");
+  });
+
+  it("populates grid with correct strategies from propagations", () => {
+    const state = manifestToState(makeManifest());
+
+    const tuitionRow = state.metricNames.indexOf("tuition_paid");
+    const classCol = state.entityNames.indexOf("Class");
+    const profCol = state.entityNames.indexOf("Professor");
+    const salaryRow = state.metricNames.indexOf("salary");
+    const classBySalaryCol = state.entityNames.indexOf("Class");
+
+    assert.equal(state.grid[tuitionRow][classCol].value, "allocation");
+    assert.equal(state.grid[tuitionRow][profCol].value, "elimination");
+    assert.equal(state.grid[salaryRow][classBySalaryCol].value, "sum_over_sum");
+  });
+
+  it("extracts weights for allocation and sum_over_sum cells", () => {
+    const state = manifestToState(makeManifest());
+    assert.equal(state.weights.get("tuition_paid:Class"), "enrollment_share");
+    assert.equal(state.weights.get("salary:Class"), "class_weight");
+    assert.equal(state.weights.size, 2);
+  });
+
+  it("leaves home cells unchanged", () => {
+    const state = manifestToState(makeManifest());
+    const tuitionRow = state.metricNames.indexOf("tuition_paid");
+    const studentCol = state.entityNames.indexOf("Student");
+    assert.equal(state.grid[tuitionRow][studentCol].value, "home");
+  });
+
+  it("leaves reserve cells that have no propagation entry", () => {
+    const state = manifestToState(makeManifest());
+    // class_budget has no propagation entry — all non-home cells stay reserve
+    const budgetRow = state.metricNames.indexOf("class_budget");
+    const studentCol = state.entityNames.indexOf("Student");
+    assert.equal(state.grid[budgetRow][studentCol].value, "reserve");
+  });
+
+  it("copies time declaration when present", () => {
+    const manifest = makeManifest();
+    manifest.time = { entity: "Class", column: "class_date", granularity: "month" };
+    const state = manifestToState(manifest);
+    assert.ok(state.time);
+    assert.equal(state.time!.entity, "Class");
+    assert.equal(state.time!.granularity, "month");
+  });
+
+  it("skips propagation edges for unknown metrics", () => {
+    const manifest = makeManifest();
+    manifest.propagations.push({
+      metric: "nonexistent_metric",
+      path: [{ relationship: "Enrollment", target_entity: "Class", strategy: "reserve" }],
+    });
+    // Should not throw
+    const state = manifestToState(manifest);
+    assert.equal(state.metricNames.includes("nonexistent_metric"), false);
+  });
+
+  it("skips propagation edges for unknown target entities", () => {
+    const manifest = makeManifest();
+    manifest.propagations[0].path.push({
+      relationship: "Unknown", target_entity: "Ghost", strategy: "reserve",
+    });
+    // Should not throw
+    const state = manifestToState(manifest);
+    assert.equal(state.entityNames.includes("Ghost"), false);
   });
 });
