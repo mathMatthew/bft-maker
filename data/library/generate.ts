@@ -46,7 +46,7 @@ const bookTitles = [
 const books = bookTitles.map((title, i) => ({
   book_id: i + 1,
   title,
-  replacement_cost: randInt(10, 40) * 100, // $10.00-$40.00 stored as cents/100
+  replacement_cost: randInt(10, 40), // $10-$40
 }));
 
 // --- Authors (8) ---
@@ -130,6 +130,8 @@ for (const p of patrons) {
 }
 
 // --- Holds (~15 active: patron × book, point-in-time) ---
+// Only create holds for patron-book pairs that have checkouts, so holds
+// always appear in the base grain of the BFT reports.
 const holds: {
   patron_id: number;
   book_id: number;
@@ -137,13 +139,13 @@ const holds: {
   hold_count: number;
 }[] = [];
 const holdSet = new Set<string>();
+const checkoutPairs = [...new Set(checkouts.map((c) => `${c.patron_id}-${c.book_id}`))];
 
 for (let i = 0; i < 25; i++) {
-  const patron_id = randInt(1, patrons.length);
-  const book_id = randInt(1, books.length);
-  const key = `${patron_id}-${book_id}`;
-  if (!holdSet.has(key)) {
-    holdSet.add(key);
+  const pair = pick(checkoutPairs);
+  if (!holdSet.has(pair)) {
+    holdSet.add(pair);
+    const [patron_id, book_id] = pair.split("-").map(Number);
     const dayOffset = randInt(150, 200);
     const holdDate = new Date(2024, 0, 1 + dayOffset);
     holds.push({

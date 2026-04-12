@@ -18,16 +18,19 @@ SELECT
     p."membership_fee",
     p."avg_fine_per_checkout",
     b."book_id",
-    b."name" AS "book_name",
+    b."title" AS "book_name",
     b."replacement_cost",
     a."author_id",
     a."name" AS "author_name",
-    c."fine_amount"
+    SUM(c."fine_amount") AS "fine_amount"
 FROM "patrons" p
 JOIN "checkouts" c ON p."patron_id" = c."patron_id"
 JOIN "books" b ON b."book_id" = c."book_id"
 JOIN "book_authors" b2 ON b."book_id" = b2."book_id"
-JOIN "authors" a ON a."author_id" = b2."author_id";
+JOIN "authors" a ON a."author_id" = b2."author_id"
+GROUP BY p."patron_id", p."name", p."membership_fee", p."avg_fine_per_checkout",
+         b."book_id", b."title", b."replacement_cost",
+         a."author_id", a."name";
 
 -----------------------------------------------------------------------
 -- Step 2: Compute weights for allocation / sum_over_sum
@@ -44,7 +47,7 @@ FROM "par_base";
 -----------------------------------------------------------------------
 CREATE OR REPLACE TABLE "patron_author_report" AS
 
--- base base rows
+-- base rows
 SELECT
     "patron_id",
     "patron_name",
@@ -101,8 +104,8 @@ UNION ALL
 
 -- Reserve placeholder rows for hold_count
 SELECT
-    "patron_id",
-    "name" AS "patron_name",
+    h."patron_id",
+    p."name" AS "patron_name",
     NULL AS "book_id",
     '<Unallocated>' AS "book_name",
     NULL AS "author_id",
@@ -110,10 +113,12 @@ SELECT
     0.0 AS "membership_fee",
     0.0 AS "fine_amount",
     0.0 AS "replacement_cost",
-    "hold_count" * 1.0 AS "hold_count",
+    SUM(h."hold_count") * 1.0 AS "hold_count",
     0.0 AS "avg_fine_per_checkout",
     0 AS "avg_fine_per_checkout_weight"
-FROM "patrons";
+FROM "holds" h
+JOIN "patrons" p ON h."patron_id" = p."patron_id"
+GROUP BY h."patron_id", p."name";
 
 -----------------------------------------------------------------------
 -- Validation

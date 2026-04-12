@@ -61,7 +61,7 @@ describe("grid tmux integration", { skip: !tmuxAvailable() }, () => {
     sendKeys(session, "Right");
     await sleep(300);
     content = capturePane(session);
-    assert.ok(content.includes("placeholder value"), "Status should describe reserve");
+    assert.ok(content.includes("Reserve"), "Status should describe reserve");
 
     // Move down → class_budget × Class (home)
     sendKeys(session, "Down");
@@ -126,7 +126,7 @@ describe("grid tmux integration", { skip: !tmuxAvailable() }, () => {
     sendKeys(session, "l");
     await sleep(300);
     let content = capturePane(session);
-    assert.ok(content.includes("placeholder value"), "l should move right to reserve cell");
+    assert.ok(content.includes("Reserve"), "l should move right to reserve cell");
 
     // j = down
     sendKeys(session, "j");

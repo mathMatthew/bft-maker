@@ -47,7 +47,7 @@ FROM "cpm_base";
 -----------------------------------------------------------------------
 CREATE OR REPLACE TABLE "customer_plan_monthly" AS
 
--- base base rows
+-- base rows
 SELECT
     "customer_id",
     "customer_name",
@@ -85,41 +85,24 @@ FROM "cpm_weighted"
 
 UNION ALL
 
--- Reserve placeholder rows for mrr
+-- Reserve placeholder rows for mrr and seat_count
 SELECT
-    "customer_id",
-    "name" AS "customer_name",
+    s."customer_id",
+    c."name" AS "customer_name",
     NULL AS "plan_id",
     '<Unallocated>' AS "plan_name",
     NULL AS "month_id",
     '<Unallocated>' AS "month_name",
     0.0 AS "annual_contract_value",
-    "mrr" * 1.0 AS "mrr",
-    0.0 AS "seat_count",
+    SUM(s."mrr") * 1.0 AS "mrr",
+    SUM(s."seat_count") * 1.0 AS "seat_count",
     0.0 AS "monthly_rate",
     0 AS "monthly_rate_weight",
     0.0 AS "amount_billed",
     0.0 AS "amount_paid"
-FROM "customers"
-
-UNION ALL
-
--- Reserve placeholder rows for seat_count
-SELECT
-    "customer_id",
-    "name" AS "customer_name",
-    NULL AS "plan_id",
-    '<Unallocated>' AS "plan_name",
-    NULL AS "month_id",
-    '<Unallocated>' AS "month_name",
-    0.0 AS "annual_contract_value",
-    0.0 AS "mrr",
-    "seat_count" * 1.0 AS "seat_count",
-    0.0 AS "monthly_rate",
-    0 AS "monthly_rate_weight",
-    0.0 AS "amount_billed",
-    0.0 AS "amount_paid"
-FROM "customers"
+FROM "subscriptions" s
+JOIN "customers" c ON s."customer_id" = c."customer_id"
+GROUP BY s."customer_id", c."name"
 
 UNION ALL
 

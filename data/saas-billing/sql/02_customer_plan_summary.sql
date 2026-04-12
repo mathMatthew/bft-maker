@@ -106,7 +106,23 @@ SELECT
     0.0 AS "seat_count",
     "amount_billed",
     "amount_paid"
-FROM "cps_g1_summarized";
+FROM "cps_g1_summarized"
+
+UNION ALL
+
+-- amount_billed elimination correction
+SELECT
+    "customer_id",
+    "customer_name",
+    NULL AS "plan_id",
+    '<Unallocated>' AS "plan_name",
+    0.0 AS "annual_contract_value",
+    0.0 AS "mrr",
+    0.0 AS "seat_count",
+    SUM("amount_billed") * (1.0 - COUNT(DISTINCT "plan_id")) / COUNT(DISTINCT "plan_id") AS "amount_billed",
+    0.0 AS "amount_paid"
+FROM "cps_g1_summarized"
+GROUP BY "customer_id", "customer_name";
 
 -----------------------------------------------------------------------
 -- Validation

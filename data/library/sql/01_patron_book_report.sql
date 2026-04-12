@@ -18,12 +18,14 @@ SELECT
     p."membership_fee",
     p."avg_fine_per_checkout",
     b."book_id",
-    b."name" AS "book_name",
+    b."title" AS "book_name",
     b."replacement_cost",
-    c."fine_amount"
+    SUM(c."fine_amount") AS "fine_amount"
 FROM "patrons" p
 JOIN "checkouts" c ON p."patron_id" = c."patron_id"
-JOIN "books" b ON b."book_id" = c."book_id";
+JOIN "books" b ON b."book_id" = c."book_id"
+GROUP BY p."patron_id", p."name", p."membership_fee", p."avg_fine_per_checkout",
+         b."book_id", b."title", b."replacement_cost";
 
 -----------------------------------------------------------------------
 -- Step 2: Compute weights for allocation / sum_over_sum
@@ -39,7 +41,7 @@ FROM "pbr_base";
 -----------------------------------------------------------------------
 CREATE OR REPLACE TABLE "patron_book_report" AS
 
--- base base rows
+-- base rows
 SELECT
     "patron_id",
     "patron_name",
@@ -48,7 +50,7 @@ SELECT
     "membership_fee" * 1.0 / "checkout_count" AS "membership_fee",
     "replacement_cost" * 1.0 AS "replacement_cost",
     "fine_amount" * 1.0 AS "fine_amount",
-    "hold_count" * 1.0 AS "hold_count",
+    0.0 AS "hold_count",
     "avg_fine_per_checkout",
     1.0 / "checkout_count" AS "avg_fine_per_checkout_weight"
 FROM "pbr_weighted"
@@ -68,7 +70,25 @@ SELECT
     0 AS "avg_fine_per_checkout",
     0 AS "avg_fine_per_checkout_weight"
 FROM "pbr_base"
-GROUP BY "book_id", "book_name", "replacement_cost";
+GROUP BY "book_id", "book_name", "replacement_cost"
+
+UNION ALL
+
+-- Reserve placeholder rows for hold_count
+SELECT
+    h."patron_id",
+    p."name" AS "patron_name",
+    h."book_id",
+    b."title" AS "book_name",
+    0.0 AS "membership_fee",
+    0.0 AS "replacement_cost",
+    0.0 AS "fine_amount",
+    h."hold_count" * 1.0 AS "hold_count",
+    0.0 AS "avg_fine_per_checkout",
+    0 AS "avg_fine_per_checkout_weight"
+FROM "holds" h
+JOIN "patrons" p ON h."patron_id" = p."patron_id"
+JOIN "books" b ON h."book_id" = b."book_id";
 
 -----------------------------------------------------------------------
 -- Validation
