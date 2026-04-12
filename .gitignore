@@ -10,3 +10,4 @@ data/northwind/*
 claude_next.sh
 claude_output.txt
 .claude/task-log
+.last-conventions-audit

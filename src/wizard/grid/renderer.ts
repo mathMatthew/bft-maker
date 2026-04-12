@@ -203,22 +203,22 @@ function renderStatusBar(
   let desc: string;
   switch (cell.value) {
     case "home":
-      desc = `${metric} lives on ${entity} (home entity)`;
+      desc = `${metric} lives on ${entity} rows — this is its home entity. No strategy needed.`;
       break;
     case "unreachable":
-      desc = `${entity} is not reachable from ${metric}'s home`;
+      desc = `${entity} cannot be reached from ${metric}'s home entity — no value is possible here.`;
       break;
     case "reserve":
-      desc = `${metric} on ${entity} rows: show placeholder value`;
+      desc = `Reserve: ${metric} is zero on ${entity} rows. Full value stays on home-entity rows only. SUM is always safe.`;
       break;
     case "elimination":
-      desc = `${metric} on ${entity} rows: exclude from total`;
+      desc = `Elimination: ${metric} shows its full value on every ${entity} row (as context). Correction rows keep SUM correct.`;
       break;
     case "allocation":
-      desc = `${metric} on ${entity} rows: allocate by weight`;
+      desc = `Allocation: ${metric} is split across ${entity} rows by a weight column. Each row gets a share. SUM is safe.`;
       break;
     case "sum_over_sum":
-      desc = `${metric} on ${entity} rows: weighted average (Σ/Σ)`;
+      desc = `Sum/Sum: ${metric} is a ratio or score — do not SUM directly. Use SUM(value × weight) / SUM(weight) to aggregate.`;
       break;
   }
 
