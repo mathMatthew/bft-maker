@@ -1,0 +1,101 @@
+entities:
+  - name: Patron
+    role: leaf
+    detail: true
+    estimated_rows: 20
+    metrics:
+      - name: membership_fee
+        type: currency
+        nature: additive
+      - name: avg_fine_per_checkout
+        type: float
+        nature: non-additive
+
+  - name: Book
+    role: bridge
+    detail: true
+    estimated_rows: 15
+    metrics:
+      - name: replacement_cost
+        type: currency
+        nature: additive
+
+  - name: Author
+    role: leaf
+    detail: true
+    estimated_rows: 8
+    metrics: []
+
+relationships:
+  - name: Checkout
+    between: [Patron, Book]
+    type: many-to-many
+    estimated_links: 60
+    metrics:
+      - name: fine_amount
+        type: currency
+        nature: additive
+
+  - name: Hold
+    between: [Patron, Book]
+    type: many-to-many
+    estimated_links: 15
+    metrics:
+      - name: hold_count
+        type: integer
+        nature: additive
+
+  - name: BookAuthor
+    between: [Book, Author]
+    type: many-to-many
+    estimated_links: 24
+    source_table: book_authors
+
+propagations:
+  # membership_fee (Patron) → Allocation to Book (via Checkout), then to Author (via BookAuthor)
+  - metric: membership_fee
+    path:
+      - relationship: Checkout
+        target_entity: Book
+        strategy: allocation
+        weight: checkout_share
+      - relationship: BookAuthor
+        target_entity: Author
+        strategy: allocation
+        weight: bookauthor_share
+
+  # replacement_cost (Book) → Elimination to Patron (a checkout doesn't create a copy)
+  - metric: replacement_cost
+    path:
+      - relationship: Checkout
+        target_entity: Patron
+        strategy: elimination
+
+  # fine_amount (Checkout junction) → Allocation to Author (via BookAuthor)
+  - metric: fine_amount
+    path:
+      - relationship: BookAuthor
+        target_entity: Author
+        strategy: allocation
+        weight: bookauthor_share
+
+  # avg_fine_per_checkout (Patron) → Sum-over-Sum to Book (via Checkout)
+  - metric: avg_fine_per_checkout
+    path:
+      - relationship: Checkout
+        target_entity: Book
+        strategy: sum_over_sum
+        weight: fine_weight
+
+  # hold_count: stock metric, stays reserve (default) — no propagation entry needed
+
+bft_tables:
+  # Patron × Book — all flow metrics + holds
+  - name: patron_book_report
+    entities: [Patron, Book]
+    metrics: [membership_fee, replacement_cost, fine_amount, hold_count, avg_fine_per_checkout]
+
+  # Patron × Book × Author — full grain, tests 2-hop propagation
+  - name: patron_author_report
+    entities: [Patron, Book, Author]
+    metrics: [membership_fee, replacement_cost, fine_amount, hold_count, avg_fine_per_checkout]

@@ -143,6 +143,11 @@ describe("wizard end-to-end (db-driven)", { skip: !tmuxAvailable() }, () => {
 
     // ── Step 4: Tables ────────────────────────────────────────
 
+    // New: decline suggested default table, define manually
+    await waitForText(session, "Suggest a table", 10000);
+    sendKeys(session, "Down");    // → "No — I'll define tables manually"
+    sendKeys(session, "Enter");
+
     await waitForText(session, "Table name", 10000);
     sendText(session, "product_region");
     sendKeys(session, "Enter");
@@ -163,8 +168,9 @@ describe("wizard end-to-end (db-driven)", { skip: !tmuxAvailable() }, () => {
     sendKeys(session, "Space");   // quantity (junction metric)
     sendKeys(session, "Enter");
 
-    await waitForText(session, "Table name");
-    sendKeys(session, "Enter");
+    // New: "Add another table?" — select "No — done"
+    await waitForText(session, "Add another table");
+    sendKeys(session, "Enter");   // "No — done" is first option
 
     // ── Hub: select Generate manifest ────────────────────────
     // Menu: Data model, Strategy matrix, Weights, BFT tables, Generate manifest, Save & quit
@@ -293,6 +299,11 @@ describe("wizard end-to-end (db-driven)", { skip: !tmuxAvailable() }, () => {
 
     // ── Step 4: Tables ────────────────────────────────────────
 
+    // New: decline suggested default table, define manually
+    await waitForText(session, "Suggest a table", 10000);
+    sendKeys(session, "Down");    // → "No — I'll define tables manually"
+    sendKeys(session, "Enter");
+
     await waitForText(session, "Table name", 10000);
     sendText(session, "sales_analysis");
     sendKeys(session, "Enter");
@@ -309,8 +320,9 @@ describe("wizard end-to-end (db-driven)", { skip: !tmuxAvailable() }, () => {
     sendKeys(session, "Space");   // budget
     sendKeys(session, "Enter");
 
-    await waitForText(session, "Table name");
-    sendKeys(session, "Enter");
+    // New: "Add another table?" — select "No — done"
+    await waitForText(session, "Add another table");
+    sendKeys(session, "Enter");   // "No — done" is first option
 
     // ── Hub: select Generate manifest ────────────────────────
 

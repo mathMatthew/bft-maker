@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { WizardState, WizardStep, GridCell } from "./state.js";
-import type { Entity, Relationship, MetricDef, BftTable } from "../manifest/types.js";
+import type { Entity, Relationship, MetricDef, BftTable, TimeDeclaration } from "../manifest/types.js";
 import type {
   DetectedModel,
   TableInfo,
@@ -23,6 +23,7 @@ interface SerializedState {
   entityNames: string[];
   weights: Record<string, string>;
   bftTables: BftTable[];
+  time?: TimeDeclaration;
 }
 
 interface SerializedDetectedModel {
@@ -79,6 +80,7 @@ export function saveDraft(
       entityNames: state.entityNames,
       weights: Object.fromEntries(state.weights),
       bftTables: state.bftTables,
+      time: state.time,
     },
   };
 
@@ -126,6 +128,7 @@ export function loadDraft(dbPath: string): LoadedDraft | null {
       entityNames: raw.state.entityNames,
       weights: new Map(Object.entries(raw.state.weights)),
       bftTables: raw.state.bftTables,
+      time: raw.state.time,
     };
 
     // Rebuild DetectedModel from saved data — re-link table references

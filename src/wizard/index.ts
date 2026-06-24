@@ -125,6 +125,14 @@ export async function runWizard(opts: WizardOptions): Promise<void> {
 
     switch (choice) {
       case "data-model": {
+        const confirm = await clack.select({
+          message: "Re-running data model will replace your current entities, matrix, and tables. Continue?",
+          options: [
+            { value: "yes", label: "Yes, start over" },
+            { value: "no", label: "Cancel" },
+          ],
+        });
+        if (clack.isCancel(confirm) || confirm === "no") break;
         // Re-run data model — reset downstream state
         state.entities = [];
         state.relationships = [];
@@ -146,7 +154,7 @@ export async function runWizard(opts: WizardOptions): Promise<void> {
 
       case "weights":
         state.step = "weights";
-        ok = await runWeightsStep(state);
+        ok = await runWeightsStep(state, savedDetectedModel);
         break;
 
       case "tables":

@@ -1,0 +1,110 @@
+entities:
+  - name: Customer
+    role: bridge
+    detail: true
+    estimated_rows: 12
+    metrics:
+      - name: annual_contract_value
+        type: currency
+        nature: additive
+
+  - name: Plan
+    role: leaf
+    detail: true
+    estimated_rows: 4
+    metrics:
+      - name: monthly_rate
+        type: currency
+        nature: non-additive
+
+  - name: Month
+    role: leaf
+    detail: true
+    estimated_rows: 6
+    label_column: month_label
+    metrics: []
+
+relationships:
+  - name: Subscription
+    between: [Customer, Plan]
+    type: many-to-many
+    estimated_links: 19
+    metrics:
+      - name: seat_count
+        type: integer
+        nature: additive
+        stock: true
+      - name: mrr
+        type: currency
+        nature: additive
+        stock: true
+
+  - name: Billing
+    between: [Customer, Month]
+    type: many-to-many
+    estimated_links: 62
+    metrics:
+      - name: amount_billed
+        type: currency
+        nature: additive
+      - name: amount_paid
+        type: currency
+        nature: additive
+
+time:
+  entity: Month
+  column: month_date
+  granularity: month
+  time_entities: [Month]
+
+propagations:
+  # annual_contract_value (Customer) → allocation to Plan weighted by seat_count
+  - metric: annual_contract_value
+    path:
+      - relationship: Subscription
+        target_entity: Plan
+        strategy: allocation
+        weight: subscription_share
+
+  # amount_billed (Billing: Customer×Month) → elimination to Plan
+  # (each plan row sees the full customer billing as context)
+  - metric: amount_billed
+    path:
+      - relationship: Subscription
+        target_entity: Plan
+        strategy: elimination
+
+  # amount_paid (Billing: Customer×Month) → allocation to Plan (weighted by seat_count)
+  - metric: amount_paid
+    path:
+      - relationship: Subscription
+        target_entity: Plan
+        strategy: allocation
+        weight: subscription_share
+
+  # monthly_rate (Plan, non-additive) → sum_over_sum to Customer
+  - metric: monthly_rate
+    path:
+      - relationship: Subscription
+        target_entity: Customer
+        strategy: sum_over_sum
+        weight: rate_weight
+
+  # mrr and seat_count: stock on Subscription, reserve by default
+  # (no propagation entry needed — they stay on Customer×Plan rows)
+
+bft_tables:
+  # Customer × Plan × Month — main report
+  # Tests stock+flow+time coexistence.
+  # mrr/seat_count are stock: weighted average when Month is summarized out.
+  # amount_billed/amount_paid are flow: SUM when Month is summarized out.
+  - name: customer_plan_monthly
+    entities: [Customer, Plan, Month]
+    metrics: [annual_contract_value, mrr, seat_count, amount_billed, amount_paid, monthly_rate]
+
+  # Customer × Plan — Month summarized out
+  # Tests stock metric time-weighted averaging (mrr, seat_count).
+  # Flow metrics (amount_billed, amount_paid) sum across months.
+  - name: customer_plan_summary
+    entities: [Customer, Plan]
+    metrics: [annual_contract_value, mrr, seat_count, amount_billed, amount_paid]

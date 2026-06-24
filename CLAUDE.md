@@ -4,12 +4,11 @@
 Big Flat Table maker. Takes a manifest describing entities, relationships, metrics, and coexistence strategies, and produces flat, SUM-safe reporting tables.
 
 ## Architecture
-Three pieces, each depends only on the manifest types:
+Four pieces, each depends only on the manifest types:
 1. **Manifest** (src/manifest/) — schema types, validation, cost estimation
 2. **Code Generator** (src/codegen/) — manifest → SQL (DuckDB primary, Spark SQL secondary)
-3. **CLI** (src/cli/) — command-line interface for generating SQL from a manifest
-
-There is no wizard UI. The "wizard" is an LLM conversation using docs/spec.md as context to guide a user through building a manifest.
+3. **CLI** (src/cli/) — command-line interface: `generate`, `validate`, `introspect`, `wizard`
+4. **Wizard** (src/wizard/) — TUI for building and editing manifests interactively; introspection logic lives here too
 
 ## Stack
 - TypeScript, minimal runtime dependencies (js-yaml for manifest parsing)
@@ -21,6 +20,21 @@ There is no wizard UI. The "wizard" is an LLM conversation using docs/spec.md as
 - `npm run build` — compile TypeScript
 - `npm test` — compile + run tests
 - `npm run dev` — tsc watch mode
+- `bft-maker introspect --db <path>` — print detected schema (entities, junctions, metrics, FKs)
+- `bft-maker wizard --db <path> [--manifest <path>] [--output <path>]` — interactive manifest builder/editor
+- `bft-maker validate --manifest <path>` — validate a manifest and report errors
+- `bft-maker generate --manifest <path> [--output <dir>]` — generate SQL from a manifest
+
+## Manifest-Building Workflow
+
+When helping a user build a manifest for a DuckDB file:
+
+1. **Read the spec** — `docs/spec.md` is the authoritative reference for manifest format, strategies, and concepts. Read it before starting.
+2. **Introspect the DB** — run `bft-maker introspect --db <path>` and read the output. This tells you entities, junction tables, detected metrics, and FK relationships.
+3. **Converse and build** — ask the user what they need to see together on a report and what the numbers should mean. Use the strategy guide in spec.md to pick Reserve / Elimination / Allocation / Sum-over-Sum for each metric × entity combination.
+4. **Write the manifest YAML** — use `data/university/manifest.yaml` as a reference for format and structure.
+5. **Validate** — run `bft-maker validate --manifest <path>`. Fix any errors and repeat.
+6. **Hand off to the wizard** — once the manifest validates, the user can run `bft-maker wizard --db <path> --manifest <path>` to review and edit it interactively.
 
 ## Conventions
 - Manifest types in src/manifest/types.ts are the source of truth
@@ -31,7 +45,12 @@ There is no wizard UI. The "wizard" is an LLM conversation using docs/spec.md as
 - Generated SQL uses CTEs and window functions — standard analytical SQL
 
 ## Datasets
-- data/northwind/ — small relational dataset (~2K junction rows) for unit-level testing
+- `data/northwind/` — classic order-management schema, used for unit-level testing
+- `data/university/` — Student × Class × Professor schema, primary fixture for strategy tests
+- `data/movielens/` — User × Movie ratings schema
+- `data/semi-additive/` — semi-additive / stock metric examples
+- `data/single-entity/` — single-entity manifest examples
+- `data/university-ops/` — university schema variant with operational metrics
 
 ## Key Concepts
 - **BFT**: Big Flat Table — a single flat table where every numeric column is safe to SUM (or explicitly flagged as requiring Sum/Sum weighted average)
@@ -63,7 +82,12 @@ There is no wizard UI. The "wizard" is an LLM conversation using docs/spec.md as
 **2. Plan the solution**
 - For bugs: explain how the fix addresses root cause directly
 - For enhancements: document what changes where, consider trade-offs
-- For medium+ changes: create a plan document for review
+- For medium+ changes: write an implementation plan into the project doc:
+  - Specific files with specific changes (use `file:line` references), not prose
+  - For complex tasks, use parallel agents to explore different approaches (simplicity vs. performance, root cause vs. workaround) before converging
+  - Re-read critical files right before planning — don't rely on what you read 20 minutes ago
+  - One verification step (test command, manual check, etc.)
+  - Keep it tight — no context/background sections, no restating the problem
 
 **3. Get approval**
 - Present your plan, highlight architectural decisions or trade-offs
@@ -72,6 +96,7 @@ There is no wizard UI. The "wizard" is an LLM conversation using docs/spec.md as
 **4. Implement**
 - Keep changes focused
 - Test appropriately throughout
+- For medium+ changes: suggest a fresh session for implementation. Before ending, confirm: "I've updated the project doc with the implementation plan — start a new session with `/p 8`." Always verify the doc is saved before saying this. A clean context with just the project doc and plan gives maximum runway.
 
 ## Code Standards
 

@@ -25,7 +25,7 @@ Manifest  →  Validator  →  Code Generator
 
 **The Code Generator** reads the manifest and produces executable transformation code plus a validation test suite. DuckDB is the primary target. Spark SQL is the secondary target for scale-out.
 
-The manifest can be produced by hand, by an LLM conversation, or by any tool that conforms to the schema. The spec you're reading now — the strategies, the phases, the examples — is what an LLM needs as context to guide someone through building a manifest. There is no wizard UI.
+The manifest can be produced by hand, by an LLM conversation, or by any tool that conforms to the schema. The spec you're reading now — the strategies, the phases, the examples — is what an LLM needs as context to guide someone through building a manifest. Once a manifest is built, it can be loaded into the interactive wizard (`bft-maker wizard --manifest <path>`) for review and editing.
 
 ---
 
