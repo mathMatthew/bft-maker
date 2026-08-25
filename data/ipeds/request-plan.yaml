@@ -1,0 +1,194 @@
+schemaVersion: 1
+dialect: duckdb
+id: ipeds_colorado_public_2022_by_program
+
+outputColumns:
+  - {name: reporting_year, type: INTEGER, role: dimension}
+  - {name: jurisdiction, type: VARCHAR, role: dimension}
+  - {name: unitid, type: INTEGER, role: dimension}
+  - {name: institution_name, type: VARCHAR, role: dimension}
+  - {name: cip_2_digit_code, type: VARCHAR, role: dimension}
+  - {name: cip_2_digit_title, type: VARCHAR, role: dimension}
+  - {name: degrees_awarded, type: BIGINT, role: metric}
+  - {name: fall_enrollment, type: BIGINT, role: metric}
+  - {name: total_revenue, type: BIGINT, role: metric}
+
+populations:
+  - name: eligible
+    from: {kind: relation, schema: main, name: institution_year, alias: iy}
+    joins:
+      - kind: inner
+        source: {kind: relation, schema: main, name: geography, alias: g}
+        on:
+          - left: {alias: iy, column: jurisdiction_geography_id}
+            right: {alias: g, column: geography_id}
+    projections:
+      reporting_year: {kind: column, alias: iy, column: collection_year}
+      jurisdiction: {kind: column, alias: g, column: label}
+      unitid: {kind: column, alias: iy, column: unitid}
+      institution_name: {kind: column, alias: iy, column: institution_name}
+    predicates:
+      - expression: {kind: column, alias: iy, column: collection_year}
+        operator: equals
+        value: {kind: literal, type: INTEGER, value: 2022}
+      - expression: {kind: column, alias: g, column: label}
+        operator: equals
+        value: {kind: literal, type: VARCHAR, value: Colorado}
+      - expression: {kind: column, alias: iy, column: control_code}
+        operator: equals
+        value: {kind: literal, type: VARCHAR, value: "1"}
+
+metrics:
+  - name: degrees_awarded
+    type: BIGINT
+    aggregation: sum
+    from: {kind: relation, schema: main, name: completion_observation, alias: c}
+    joins:
+      - kind: inner
+        source: {kind: relation, schema: main, name: reporting_period, alias: period}
+        on:
+          - left: {alias: c, column: period_id}
+            right: {alias: period, column: period_id}
+      - kind: inner
+        source: {kind: population, name: eligible, alias: e}
+        on:
+          - left: {alias: c, column: unitid}
+            right: {alias: e, column: unitid}
+          - left: {alias: period, column: reporting_year}
+            right: {alias: e, column: reporting_year}
+      - kind: inner
+        source: {kind: relation, schema: main, name: program, alias: p6}
+        on:
+          - left: {alias: c, column: program_id}
+            right: {alias: p6, column: program_id}
+      - kind: inner
+        source: {kind: relation, schema: main, name: program, alias: p4}
+        on:
+          - left: {alias: p6, column: parent_program_id}
+            right: {alias: p4, column: program_id}
+      - kind: inner
+        source: {kind: relation, schema: main, name: program, alias: p2}
+        on:
+          - left: {alias: p4, column: parent_program_id}
+            right: {alias: p2, column: program_id}
+      - kind: inner
+        source: {kind: relation, schema: main, name: demographic_cell, alias: demographic}
+        on:
+          - left: {alias: c, column: demographic_cell_id}
+            right: {alias: demographic, column: demographic_cell_id}
+    expression: {kind: column, alias: c, column: award_count}
+    dimensions:
+      reporting_year: {kind: column, alias: e, column: reporting_year}
+      jurisdiction: {kind: column, alias: e, column: jurisdiction}
+      unitid: {kind: column, alias: e, column: unitid}
+      institution_name: {kind: column, alias: e, column: institution_name}
+      cip_2_digit_code: {kind: column, alias: p2, column: cip_code}
+      cip_2_digit_title: {kind: column, alias: p2, column: title}
+    reserveDimensions: {}
+    predicates:
+      - expression: {kind: column, alias: period, column: period_type}
+        operator: equals
+        value: {kind: literal, type: VARCHAR, value: completions}
+      - expression: {kind: column, alias: c, column: major_number}
+        operator: equals
+        value: {kind: literal, type: INTEGER, value: 1}
+      - expression: {kind: column, alias: demographic, column: is_atomic}
+        operator: equals
+        value: {kind: literal, type: BOOLEAN, value: true}
+
+  - name: fall_enrollment
+    type: BIGINT
+    aggregation: sum
+    from: {kind: relation, schema: main, name: enrollment_observation, alias: enrollment}
+    joins:
+      - kind: inner
+        source: {kind: relation, schema: main, name: reporting_period, alias: period}
+        on:
+          - left: {alias: enrollment, column: period_id}
+            right: {alias: period, column: period_id}
+      - kind: inner
+        source: {kind: population, name: eligible, alias: e}
+        on:
+          - left: {alias: enrollment, column: unitid}
+            right: {alias: e, column: unitid}
+          - left: {alias: period, column: reporting_year}
+            right: {alias: e, column: reporting_year}
+      - kind: inner
+        source: {kind: relation, schema: main, name: enrollment_level, alias: enrollment_level}
+        on:
+          - left: {alias: enrollment, column: enrollment_level_code}
+            right: {alias: enrollment_level, column: enrollment_level_code}
+      - kind: inner
+        source: {kind: relation, schema: main, name: demographic_cell, alias: demographic}
+        on:
+          - left: {alias: enrollment, column: demographic_cell_id}
+            right: {alias: demographic, column: demographic_cell_id}
+    expression: {kind: column, alias: enrollment, column: headcount}
+    dimensions:
+      reporting_year: {kind: column, alias: e, column: reporting_year}
+      jurisdiction: {kind: column, alias: e, column: jurisdiction}
+      unitid: {kind: column, alias: e, column: unitid}
+      institution_name: {kind: column, alias: e, column: institution_name}
+    reserveDimensions:
+      cip_2_digit_code: {kind: literal, type: VARCHAR, value: "<Unallocated>"}
+      cip_2_digit_title: {kind: literal, type: VARCHAR, value: "<Unallocated>"}
+    predicates:
+      - expression: {kind: column, alias: period, column: period_type}
+        operator: equals
+        value: {kind: literal, type: VARCHAR, value: fall}
+      - expression: {kind: column, alias: enrollment_level, column: is_atomic}
+        operator: equals
+        value: {kind: literal, type: BOOLEAN, value: true}
+      - expression: {kind: column, alias: demographic, column: is_atomic}
+        operator: equals
+        value: {kind: literal, type: BOOLEAN, value: true}
+
+  - name: total_revenue
+    type: BIGINT
+    aggregation: sum
+    from: {kind: relation, schema: main, name: finance_observation, alias: finance}
+    joins:
+      - kind: inner
+        source: {kind: relation, schema: main, name: reporting_period, alias: period}
+        on:
+          - left: {alias: finance, column: period_id}
+            right: {alias: period, column: period_id}
+      - kind: inner
+        source: {kind: population, name: eligible, alias: e}
+        on:
+          - left: {alias: finance, column: unitid}
+            right: {alias: e, column: unitid}
+          - left: {alias: period, column: reporting_year}
+            right: {alias: e, column: reporting_year}
+      - kind: inner
+        source: {kind: relation, schema: main, name: finance_source_variable, alias: source_variable}
+        on:
+          - left: {alias: finance, column: source_variable_id}
+            right: {alias: source_variable, column: source_variable_id}
+      - kind: inner
+        source: {kind: relation, schema: main, name: finance_measure, alias: measure}
+        on:
+          - left: {alias: source_variable, column: canonical_measure_id}
+            right: {alias: measure, column: finance_measure_id}
+    expression: {kind: column, alias: finance, column: amount}
+    dimensions:
+      reporting_year: {kind: column, alias: e, column: reporting_year}
+      jurisdiction: {kind: column, alias: e, column: jurisdiction}
+      unitid: {kind: column, alias: e, column: unitid}
+      institution_name: {kind: column, alias: e, column: institution_name}
+    reserveDimensions:
+      cip_2_digit_code: {kind: literal, type: VARCHAR, value: "<Unallocated>"}
+      cip_2_digit_title: {kind: literal, type: VARCHAR, value: "<Unallocated>"}
+    predicates:
+      - expression: {kind: column, alias: period, column: period_type}
+        operator: equals
+        value: {kind: literal, type: VARCHAR, value: fiscal}
+      - expression: {kind: column, alias: measure, column: canonical_name}
+        operator: equals
+        value: {kind: literal, type: VARCHAR, value: total_revenue}
+
+orderBy:
+  - {column: institution_name, direction: asc}
+  - {column: unitid, direction: asc}
+  - {column: cip_2_digit_code, direction: asc}
+  - {column: cip_2_digit_title, direction: asc}
