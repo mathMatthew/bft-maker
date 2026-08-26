@@ -74,6 +74,7 @@ describe("BFT output metadata version 1", () => {
       kind: "reserve",
       measureIds: ["headcount"],
     }]);
+    assert.deepEqual(metadata.filterConstraints, []);
   });
 
   it("serializes canonical footer values byte-for-byte", () => {

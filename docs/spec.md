@@ -496,11 +496,17 @@ output/
 |---|---|---|
 | Allocated metric | Yes | Always correct for any slice |
 | Elimination metric | Yes | Rows with placeholder labels must be included |
-| Reserve metric | Yes | Rows with placeholder labels must be included |
+| Reserve metric | Yes | The value exists only when the reserve row is in the selected population |
 | Sum / Sum metric | No | Must use `SUM(weighted) / SUM(weight)` |
 | Count column | Depends | Follows the same rules as its assigned strategy |
 
-Some entity columns contain placeholder labels (default `<Unallocated>`, configurable per manifest). These appear on rows where a metric's value isn't attributed to a specific entity — for example, a student's tuition appears on a row where the Class column is `<Unallocated>` because tuition isn't about any specific class. For elimination and reserve metrics, filtering out rows with placeholder labels will silently produce wrong sums. All such columns carry a persistent flag in the output schema indicating this dependency.
+Some entity columns contain placeholder labels (default `<Unallocated>`, configurable per manifest). These appear on rows where a metric's value isn't attributed to a specific entity — for example, a student's tuition appears on a row where the Class column is `<Unallocated>` because tuition isn't about any specific class. All such columns carry a persistent flag in the output schema indicating this dependency.
+For elimination metrics, the declared correction population and filter
+constraint determine which subsets are safe. For reserve metrics, an explicit
+filter may remove the placeholder: that drops the metric for the selected
+lower-grain population and should display as unavailable, not as a zero or an
+incorrect partial sum. Merely hiding a placeholder label is presentation and
+must not filter its row.
 
 ---
 
