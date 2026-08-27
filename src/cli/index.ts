@@ -4,43 +4,68 @@ import * as path from "node:path";
 import * as process from "node:process";
 import { loadManifest, validate } from "../manifest/index.js";
 import { generate, emitFiles } from "../codegen/index.js";
+import { compileRequest, emitCompiledRequest, loadRequestPlan } from "../request-compiler/index.js";
 import { runWizard } from "../wizard/index.js";
 import { introspect, type DetectedModel } from "../wizard/introspect.js";
 
 function usage(): never {
   console.error(`Usage:
-  bft-maker generate --manifest <path> [--output <dir>]
+  bft-maker generate --manifest <path> [--source <csv|database>] [--output <dir>]
+  bft-maker compile-request --plan <path> [--output <dir>]
   bft-maker validate --manifest <path>
   bft-maker introspect --db <duckdb-path>
   bft-maker wizard --db <duckdb-path> [--manifest <path>] [--output <path>]`);
   process.exit(1);
 }
 
-function parseArgs(argv: string[]): { command: string; manifest: string; output: string; db: string } {
+function parseArgs(argv: string[]): {
+  command: string;
+  manifest: string;
+  output: string;
+  db: string;
+  plan: string;
+  source: "csv" | "database";
+} {
   const args = argv.slice(2);
   const command = args[0];
-  if (!command || !["generate", "validate", "introspect", "wizard"].includes(command)) {
+  if (!command || !["generate", "compile-request", "validate", "introspect", "wizard"].includes(command)) {
     usage();
   }
 
   let manifest = "";
   let output = "./out";
   let db = "";
+  let plan = "";
+  let source: "csv" | "database" = "csv";
   for (let i = 1; i < args.length; i++) {
     if (args[i] === "--manifest" && args[i + 1]) {
       manifest = args[++i];
+    } else if (args[i] === "--plan" && args[i + 1]) {
+      plan = args[++i];
     } else if (args[i] === "--output" && args[i + 1]) {
       output = args[++i];
     } else if (args[i] === "--db" && args[i + 1]) {
       db = args[++i];
+    } else if (args[i] === "--source" && args[i + 1]) {
+      const value = args[++i];
+      if (value !== "csv" && value !== "database") {
+        console.error(`Error: --source must be "csv" or "database", got "${value}"`);
+        usage();
+      }
+      source = value;
     } else {
       console.error(`Unknown argument: ${args[i]}`);
       usage();
     }
   }
 
-  if (command !== "wizard" && command !== "introspect" && !manifest) {
+  if (command !== "wizard" && command !== "introspect" && command !== "compile-request" && !manifest) {
     console.error("Error: --manifest is required");
+    usage();
+  }
+
+  if (command === "compile-request" && !plan) {
+    console.error("Error: --plan is required for compile-request");
     usage();
   }
 
@@ -49,7 +74,7 @@ function parseArgs(argv: string[]): { command: string; manifest: string; output:
     usage();
   }
 
-  return { command, manifest, output, db };
+  return { command, manifest, output, db, plan, source };
 }
 
 
@@ -136,7 +161,11 @@ async function runIntrospect(dbPath: string): Promise<void> {
   console.log(formatIntrospectOutput(model));
 }
 
-function runGenerate(manifestPath: string, outputDir: string): void {
+function runGenerate(
+  manifestPath: string,
+  outputDir: string,
+  source: "csv" | "database",
+): void {
   const manifest = loadManifest(manifestPath);
   const errors = validate(manifest);
 
@@ -155,17 +184,28 @@ function runGenerate(manifestPath: string, outputDir: string): void {
   }
 
   const dataDir = path.dirname(path.resolve(manifestPath));
-  const result = generate(manifest, { dataDir });
+  const result = generate(manifest, { dataDir, source });
   const written = emitFiles(result, outputDir);
 
   console.log(`Generated ${written.length} files in ${outputDir}/`);
   for (const f of written) {
     console.log(`  ${f}`);
   }
+  if (source === "database") {
+    console.log(`Run ${path.join(outputDir, "run.sh")} <database_path> to materialize and count the BFT tables.`);
+  }
+}
+
+function runCompileRequest(planPath: string, outputDir: string): void {
+  const plan = loadRequestPlan(planPath);
+  const compiled = compileRequest(plan);
+  const written = emitCompiledRequest(compiled, outputDir);
+  console.log(`Compiled request "${compiled.metadata.requestId}" into ${outputDir}/`);
+  for (const file of written) console.log(`  ${file}`);
 }
 
 async function main(): Promise<void> {
-  const { command, manifest, output, db } = parseArgs(process.argv);
+  const { command, manifest, output, db, plan, source } = parseArgs(process.argv);
   if (command === "wizard") {
     await runWizard({
       dbPath: db,
@@ -176,8 +216,10 @@ async function main(): Promise<void> {
     await runIntrospect(db);
   } else if (command === "validate") {
     runValidate(manifest);
+  } else if (command === "compile-request") {
+    runCompileRequest(plan, output);
   } else {
-    runGenerate(manifest, output);
+    runGenerate(manifest, output, source);
   }
 }
 
