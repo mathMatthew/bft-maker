@@ -1,0 +1,5288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BFT Explorer — Library Dataset</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #242734;
+    --border: #2e3348;
+    --text: #e2e4ed;
+    --text-dim: #8b8fa3;
+    --accent: #6c8cff;
+    --alloc: #5b9f5b;
+    --elim: #c45c5c;
+    --reserve: #7a7a8c;
+    --sumsum: #c49b3c;
+    --home: #6c8cff;
+    --junction: #8b6cc4;
+    --correction: rgba(196, 92, 92, 0.12);
+    --reserve-row: rgba(122, 122, 140, 0.10);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    font-size: 13px;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+  }
+
+  header {
+    padding: 24px 32px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  header h1 {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 4px;
+  }
+
+  header p { color: var(--text-dim); font-size: 12px; }
+
+  .steps {
+    display: flex;
+    gap: 0;
+    padding: 0 32px;
+    margin-top: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .step-tab {
+    padding: 10px 20px;
+    cursor: pointer;
+    color: var(--text-dim);
+    border-bottom: 2px solid transparent;
+    font-size: 13px;
+    font-family: inherit;
+    background: none;
+    border-top: none;
+    border-left: none;
+    border-right: none;
+    transition: all 0.15s;
+  }
+
+  .step-tab:hover { color: var(--text); }
+
+  .step-tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+
+  .step-tab .num {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    line-height: 20px;
+    text-align: center;
+    border-radius: 50%;
+    background: var(--surface2);
+    font-size: 11px;
+    margin-right: 6px;
+  }
+
+  .step-tab.active .num { background: var(--accent); color: var(--bg); }
+
+  main { padding: 24px 32px; }
+
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  .section {
+    margin-bottom: 28px;
+  }
+
+  .section h2 {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 4px;
+    color: var(--text);
+  }
+
+  .section h2 .badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: 10px;
+    margin-left: 8px;
+    vertical-align: middle;
+  }
+
+  .section p.desc {
+    color: var(--text-dim);
+    font-size: 12px;
+    margin-bottom: 12px;
+  }
+
+  .table-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+  }
+
+  .table-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    max-width: 100%;
+  }
+
+  .table-card .card-header {
+    padding: 8px 12px;
+    background: var(--surface2);
+    font-weight: 600;
+    font-size: 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .table-card .card-header .row-count {
+    font-weight: 400;
+    color: var(--text-dim);
+    font-size: 11px;
+  }
+
+  .table-wrap {
+    overflow-x: auto;
+    max-height: 400px;
+    overflow-y: auto;
+  }
+
+  table {
+    border-collapse: collapse;
+    font-size: 12px;
+    width: 100%;
+  }
+
+  th {
+    padding: 6px 10px;
+    text-align: left;
+    background: var(--surface2);
+    color: var(--text-dim);
+    font-weight: 500;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+  }
+
+  td {
+    padding: 5px 10px;
+    border-top: 1px solid var(--border);
+    white-space: nowrap;
+  }
+
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.null { color: var(--text-dim); font-style: italic; }
+
+  th.sortable { cursor: pointer; user-select: none; }
+  th.sortable:hover { color: var(--text); background: var(--border); }
+  .sort-ind { color: var(--accent); font-size: 10px; margin-left: 2px; }
+
+  .sort-reset {
+    font-family: inherit;
+    font-size: 11px;
+    padding: 2px 8px;
+    background: var(--surface);
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+    margin-left: auto;
+  }
+  .sort-reset:hover { color: var(--text); border-color: var(--accent); }
+
+  /* BFT column coloring */
+  .col-alloc { color: var(--alloc); }
+  .col-elim { color: var(--elim); }
+  .col-reserve { color: var(--reserve); }
+  .col-sumsum { color: var(--sumsum); }
+  .col-home { color: var(--home); }
+  .col-junction { color: var(--junction); }
+
+  tr.correction-row td { background: var(--correction); }
+  tr.reserve-row td { background: var(--reserve-row); }
+
+  /* Strategy rules */
+  .rules-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    gap: 16px;
+  }
+
+  .rule-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+  }
+
+  .rule-card h3 {
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .rule-card h3 .pill {
+    font-size: 10px;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .pill-alloc { background: rgba(91, 159, 91, 0.2); color: var(--alloc); }
+  .pill-elim { background: rgba(196, 92, 92, 0.2); color: var(--elim); }
+  .pill-reserve { background: rgba(122, 122, 140, 0.2); color: var(--reserve); }
+  .pill-sumsum { background: rgba(196, 155, 60, 0.2); color: var(--sumsum); }
+  .pill-home { background: rgba(108, 140, 255, 0.2); color: var(--home); }
+  .pill-junction { background: rgba(139, 108, 196, 0.2); color: var(--junction); }
+
+  .rule-card .source { color: var(--text-dim); font-size: 12px; margin-bottom: 10px; }
+
+  .rule-path {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    font-size: 12px;
+  }
+
+  .rule-path .entity {
+    background: var(--surface2);
+    padding: 3px 10px;
+    border-radius: 4px;
+    font-weight: 500;
+  }
+
+  .rule-path .arrow {
+    color: var(--text-dim);
+    font-size: 14px;
+  }
+
+  .rule-path .strategy-label {
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 3px;
+  }
+
+  .rule-detail {
+    margin-top: 10px;
+    padding: 8px 10px;
+    background: var(--surface2);
+    border-radius: 4px;
+    font-size: 11px;
+    color: var(--text-dim);
+    line-height: 1.6;
+  }
+
+  .rule-card .rule-detail + .rule-detail {
+    margin-top: 6px;
+    border-left: 2px solid var(--border);
+  }
+
+  /* Verification badges */
+  .verify-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px;
+    margin-top: 16px;
+  }
+
+  .verify-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 14px;
+    font-size: 12px;
+  }
+
+  .verify-card .label { color: var(--text-dim); margin-bottom: 4px; }
+
+  .verify-card .values {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+
+  .verify-card .match { color: var(--alloc); }
+  .verify-card .mismatch { color: var(--elim); }
+
+  /* Legend */
+  .legend {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    padding: 10px 14px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin-bottom: 20px;
+    font-size: 11px;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .legend-swatch {
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+  }
+
+  /* Filter bar for BFT */
+  .filter-bar {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+  }
+
+  .filter-bar label {
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  .filter-bar select {
+    font-family: inherit;
+    font-size: 12px;
+    padding: 4px 8px;
+    background: var(--surface2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+  }
+
+  .filter-bar select:focus {
+    outline: 1px solid var(--accent);
+  }
+
+  /* Metric toggle buttons */
+  .metric-toggles {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+
+  .metric-toggle {
+    font-family: inherit;
+    font-size: 12px;
+    padding: 6px 12px;
+    background: var(--surface);
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s;
+    opacity: 0.45;
+  }
+
+  .metric-toggle:hover { opacity: 0.7; }
+
+  .metric-toggle.on {
+    opacity: 1;
+    color: var(--text);
+    border-color: var(--accent);
+    background: var(--surface2);
+  }
+
+  .metric-toggle .pill {
+    display: inline-block;
+    font-size: 9px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-right: 4px;
+    vertical-align: middle;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>BFT Explorer</h1>
+  <p>Library dataset &mdash; Patron x Book x Author &mdash; showing how source tables become a SUM-safe Big Flat Table</p>
+</header>
+
+<div class="steps">
+  <button class="step-tab active" data-panel="source"><span class="num">1</span>Source Tables</button>
+  <button class="step-tab" data-panel="rules"><span class="num">2</span>Strategy Rules</button>
+  <button class="step-tab" data-panel="bft"><span class="num">3</span>BFT Result</button>
+</div>
+
+<main>
+  <!-- PANEL 1: SOURCE TABLES -->
+  <div id="source" class="panel active"></div>
+
+  <!-- PANEL 2: RULES -->
+  <div id="rules" class="panel"></div>
+
+  <!-- PANEL 3: BFT -->
+  <div id="bft" class="panel"></div>
+</main>
+
+<script>
+// ── DATA (embedded) ──────────────────────────────────────────
+const DATA = {
+  "patrons": {
+    "columns": [
+      "patron_id",
+      "name",
+      "membership_fee",
+      "avg_fine_per_checkout"
+    ],
+    "rows": [
+      {
+        "patron_id": 1,
+        "name": "Alice",
+        "membership_fee": 60,
+        "avg_fine_per_checkout": 0.33
+      },
+      {
+        "patron_id": 2,
+        "name": "Bob",
+        "membership_fee": 30,
+        "avg_fine_per_checkout": 1.38
+      },
+      {
+        "patron_id": 3,
+        "name": "Carol",
+        "membership_fee": 30,
+        "avg_fine_per_checkout": 0.0
+      },
+      {
+        "patron_id": 4,
+        "name": "Dan",
+        "membership_fee": 60,
+        "avg_fine_per_checkout": 3.25
+      },
+      {
+        "patron_id": 5,
+        "name": "Eve",
+        "membership_fee": 80,
+        "avg_fine_per_checkout": 2.0
+      },
+      {
+        "patron_id": 6,
+        "name": "Frank",
+        "membership_fee": 20,
+        "avg_fine_per_checkout": 0.0
+      },
+      {
+        "patron_id": 7,
+        "name": "Grace",
+        "membership_fee": 100,
+        "avg_fine_per_checkout": 0.0
+      },
+      {
+        "patron_id": 8,
+        "name": "Hank",
+        "membership_fee": 40,
+        "avg_fine_per_checkout": 0.5
+      },
+      {
+        "patron_id": 9,
+        "name": "Iris",
+        "membership_fee": 80,
+        "avg_fine_per_checkout": 0.0
+      },
+      {
+        "patron_id": 10,
+        "name": "Jack",
+        "membership_fee": 100,
+        "avg_fine_per_checkout": 0.75
+      },
+      {
+        "patron_id": 11,
+        "name": "Kate",
+        "membership_fee": 80,
+        "avg_fine_per_checkout": 0.5
+      },
+      {
+        "patron_id": 12,
+        "name": "Leo",
+        "membership_fee": 100,
+        "avg_fine_per_checkout": 4.0
+      },
+      {
+        "patron_id": 13,
+        "name": "Mia",
+        "membership_fee": 40,
+        "avg_fine_per_checkout": 1.75
+      },
+      {
+        "patron_id": 14,
+        "name": "Nate",
+        "membership_fee": 80,
+        "avg_fine_per_checkout": 1.0
+      },
+      {
+        "patron_id": 15,
+        "name": "Olive",
+        "membership_fee": 30,
+        "avg_fine_per_checkout": 0.0
+      },
+      {
+        "patron_id": 16,
+        "name": "Pat",
+        "membership_fee": 30,
+        "avg_fine_per_checkout": 1.67
+      },
+      {
+        "patron_id": 17,
+        "name": "Quinn",
+        "membership_fee": 40,
+        "avg_fine_per_checkout": 1.5
+      },
+      {
+        "patron_id": 18,
+        "name": "Rosa",
+        "membership_fee": 100,
+        "avg_fine_per_checkout": 0.0
+      },
+      {
+        "patron_id": 19,
+        "name": "Sam",
+        "membership_fee": 90,
+        "avg_fine_per_checkout": 1.5
+      },
+      {
+        "patron_id": 20,
+        "name": "Tina",
+        "membership_fee": 90,
+        "avg_fine_per_checkout": 0.44
+      }
+    ]
+  },
+  "books": {
+    "columns": [
+      "book_id",
+      "title",
+      "replacement_cost"
+    ],
+    "rows": [
+      {
+        "book_id": 1,
+        "title": "The Great Gatsby",
+        "replacement_cost": 13
+      },
+      {
+        "book_id": 2,
+        "title": "To Kill a Mockingbird",
+        "replacement_cost": 21
+      },
+      {
+        "book_id": 3,
+        "title": "1984",
+        "replacement_cost": 13
+      },
+      {
+        "book_id": 4,
+        "title": "Pride and Prejudice",
+        "replacement_cost": 26
+      },
+      {
+        "book_id": 5,
+        "title": "The Catcher in the Rye",
+        "replacement_cost": 37
+      },
+      {
+        "book_id": 6,
+        "title": "Brave New World",
+        "replacement_cost": 29
+      },
+      {
+        "book_id": 7,
+        "title": "Lord of the Flies",
+        "replacement_cost": 19
+      },
+      {
+        "book_id": 8,
+        "title": "Animal Farm",
+        "replacement_cost": 30
+      },
+      {
+        "book_id": 9,
+        "title": "The Hobbit",
+        "replacement_cost": 38
+      },
+      {
+        "book_id": 10,
+        "title": "Fahrenheit 451",
+        "replacement_cost": 13
+      },
+      {
+        "book_id": 11,
+        "title": "Jane Eyre",
+        "replacement_cost": 11
+      },
+      {
+        "book_id": 12,
+        "title": "Wuthering Heights",
+        "replacement_cost": 12
+      },
+      {
+        "book_id": 13,
+        "title": "Dune",
+        "replacement_cost": 30
+      },
+      {
+        "book_id": 14,
+        "title": "Neuromancer",
+        "replacement_cost": 31
+      },
+      {
+        "book_id": 15,
+        "title": "Foundation",
+        "replacement_cost": 21
+      }
+    ]
+  },
+  "authors": {
+    "columns": [
+      "author_id",
+      "name"
+    ],
+    "rows": [
+      {
+        "author_id": 1,
+        "name": "Fitzgerald"
+      },
+      {
+        "author_id": 2,
+        "name": "Lee"
+      },
+      {
+        "author_id": 3,
+        "name": "Orwell"
+      },
+      {
+        "author_id": 4,
+        "name": "Austen"
+      },
+      {
+        "author_id": 5,
+        "name": "Salinger"
+      },
+      {
+        "author_id": 6,
+        "name": "Huxley"
+      },
+      {
+        "author_id": 7,
+        "name": "Golding"
+      },
+      {
+        "author_id": 8,
+        "name": "Tolkien"
+      }
+    ]
+  },
+  "book_authors": {
+    "columns": [
+      "book_id",
+      "author_id"
+    ],
+    "rows": [
+      {
+        "book_id": 1,
+        "author_id": 7
+      },
+      {
+        "book_id": 2,
+        "author_id": 2
+      },
+      {
+        "book_id": 3,
+        "author_id": 4
+      },
+      {
+        "book_id": 4,
+        "author_id": 4
+      },
+      {
+        "book_id": 5,
+        "author_id": 4
+      },
+      {
+        "book_id": 6,
+        "author_id": 8
+      },
+      {
+        "book_id": 7,
+        "author_id": 8
+      },
+      {
+        "book_id": 8,
+        "author_id": 2
+      },
+      {
+        "book_id": 9,
+        "author_id": 4
+      },
+      {
+        "book_id": 10,
+        "author_id": 8
+      },
+      {
+        "book_id": 11,
+        "author_id": 3
+      },
+      {
+        "book_id": 12,
+        "author_id": 5
+      },
+      {
+        "book_id": 13,
+        "author_id": 2
+      },
+      {
+        "book_id": 14,
+        "author_id": 5
+      },
+      {
+        "book_id": 15,
+        "author_id": 7
+      },
+      {
+        "book_id": 7,
+        "author_id": 5
+      },
+      {
+        "book_id": 1,
+        "author_id": 5
+      },
+      {
+        "book_id": 11,
+        "author_id": 7
+      },
+      {
+        "book_id": 14,
+        "author_id": 4
+      },
+      {
+        "book_id": 12,
+        "author_id": 2
+      },
+      {
+        "book_id": 11,
+        "author_id": 6
+      },
+      {
+        "book_id": 4,
+        "author_id": 8
+      },
+      {
+        "book_id": 4,
+        "author_id": 7
+      },
+      {
+        "book_id": 10,
+        "author_id": 7
+      }
+    ]
+  },
+  "checkouts": {
+    "columns": [
+      "checkout_id",
+      "patron_id",
+      "book_id",
+      "checkout_date",
+      "return_date",
+      "fine_amount"
+    ],
+    "rows": [
+      {
+        "checkout_id": 1,
+        "patron_id": 5,
+        "book_id": 1,
+        "checkout_date": "2024-02-12",
+        "return_date": "2024-02-28",
+        "fine_amount": 2.0
+      },
+      {
+        "checkout_id": 2,
+        "patron_id": 20,
+        "book_id": 7,
+        "checkout_date": "2024-03-23",
+        "return_date": "2024-04-05",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 3,
+        "patron_id": 13,
+        "book_id": 6,
+        "checkout_date": "2024-05-02",
+        "return_date": "2024-05-27",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 4,
+        "patron_id": 6,
+        "book_id": 2,
+        "checkout_date": "2024-02-24",
+        "return_date": "2024-03-25",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 5,
+        "patron_id": 10,
+        "book_id": 13,
+        "checkout_date": "2024-01-17",
+        "return_date": "2024-01-24",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 6,
+        "patron_id": 20,
+        "book_id": 9,
+        "checkout_date": "2024-03-02",
+        "return_date": "2024-03-26",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 7,
+        "patron_id": 20,
+        "book_id": 11,
+        "checkout_date": "2024-05-29",
+        "return_date": "2024-06-12",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 8,
+        "patron_id": 2,
+        "book_id": 8,
+        "checkout_date": "2024-05-26",
+        "return_date": "2024-05-29",
+        "fine_amount": 4.0
+      },
+      {
+        "checkout_id": 9,
+        "patron_id": 19,
+        "book_id": 8,
+        "checkout_date": "2024-02-03",
+        "return_date": "2024-02-17",
+        "fine_amount": 1.5
+      },
+      {
+        "checkout_id": 10,
+        "patron_id": 10,
+        "book_id": 12,
+        "checkout_date": "2024-05-31",
+        "return_date": "2024-06-27",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 11,
+        "patron_id": 17,
+        "book_id": 14,
+        "checkout_date": "2024-01-26",
+        "return_date": "2024-02-21",
+        "fine_amount": 3.0
+      },
+      {
+        "checkout_id": 12,
+        "patron_id": 2,
+        "book_id": 1,
+        "checkout_date": "2024-06-12",
+        "return_date": "2024-07-11",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 13,
+        "patron_id": 13,
+        "book_id": 10,
+        "checkout_date": "2024-01-24",
+        "return_date": "2024-02-06",
+        "fine_amount": 3.5
+      },
+      {
+        "checkout_id": 14,
+        "patron_id": 19,
+        "book_id": 8,
+        "checkout_date": "2024-06-19",
+        "return_date": "2024-06-24",
+        "fine_amount": 3.5
+      },
+      {
+        "checkout_id": 15,
+        "patron_id": 6,
+        "book_id": 6,
+        "checkout_date": "2024-06-18",
+        "return_date": "2024-07-05",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 16,
+        "patron_id": 1,
+        "book_id": 2,
+        "checkout_date": "2024-05-04",
+        "return_date": "2024-05-19",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 17,
+        "patron_id": 10,
+        "book_id": 2,
+        "checkout_date": "2024-06-28",
+        "return_date": "2024-07-28",
+        "fine_amount": 3.0
+      },
+      {
+        "checkout_id": 18,
+        "patron_id": 3,
+        "book_id": 2,
+        "checkout_date": "2024-02-11",
+        "return_date": "2024-02-27",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 19,
+        "patron_id": 1,
+        "book_id": 14,
+        "checkout_date": "2024-06-11",
+        "return_date": "2024-07-03",
+        "fine_amount": 1.0
+      },
+      {
+        "checkout_id": 20,
+        "patron_id": 2,
+        "book_id": 13,
+        "checkout_date": "2024-02-02",
+        "return_date": "2024-02-08",
+        "fine_amount": 1.5
+      },
+      {
+        "checkout_id": 21,
+        "patron_id": 11,
+        "book_id": 9,
+        "checkout_date": "2024-01-22",
+        "return_date": "2024-02-18",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 22,
+        "patron_id": 7,
+        "book_id": 3,
+        "checkout_date": "2024-05-10",
+        "return_date": "2024-05-24",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 23,
+        "patron_id": 17,
+        "book_id": 12,
+        "checkout_date": "2024-01-20",
+        "return_date": "2024-01-31",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 24,
+        "patron_id": 4,
+        "book_id": 9,
+        "checkout_date": "2024-02-23",
+        "return_date": "2024-03-10",
+        "fine_amount": 3.5
+      },
+      {
+        "checkout_id": 25,
+        "patron_id": 18,
+        "book_id": 9,
+        "checkout_date": "2024-02-22",
+        "return_date": "2024-03-14",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 26,
+        "patron_id": 8,
+        "book_id": 13,
+        "checkout_date": "2024-05-08",
+        "return_date": "2024-05-23",
+        "fine_amount": 3.0
+      },
+      {
+        "checkout_id": 27,
+        "patron_id": 8,
+        "book_id": 9,
+        "checkout_date": "2024-04-19",
+        "return_date": "2024-05-17",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 28,
+        "patron_id": 16,
+        "book_id": 5,
+        "checkout_date": "2024-02-01",
+        "return_date": "2024-02-04",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 29,
+        "patron_id": 1,
+        "book_id": 14,
+        "checkout_date": "2024-01-19",
+        "return_date": "2024-02-09",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 30,
+        "patron_id": 16,
+        "book_id": 15,
+        "checkout_date": "2024-03-02",
+        "return_date": "2024-03-10",
+        "fine_amount": 5.0
+      },
+      {
+        "checkout_id": 31,
+        "patron_id": 3,
+        "book_id": 13,
+        "checkout_date": "2024-02-22",
+        "return_date": "2024-03-04",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 32,
+        "patron_id": 19,
+        "book_id": 9,
+        "checkout_date": "2024-02-13",
+        "return_date": "2024-02-28",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 33,
+        "patron_id": 15,
+        "book_id": 12,
+        "checkout_date": "2024-05-09",
+        "return_date": "2024-05-17",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 34,
+        "patron_id": 18,
+        "book_id": 4,
+        "checkout_date": "2024-01-28",
+        "return_date": "2024-02-21",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 35,
+        "patron_id": 11,
+        "book_id": 14,
+        "checkout_date": "2024-04-12",
+        "return_date": "2024-04-28",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 36,
+        "patron_id": 4,
+        "book_id": 8,
+        "checkout_date": "2024-02-26",
+        "return_date": "2024-03-23",
+        "fine_amount": 3.0
+      },
+      {
+        "checkout_id": 37,
+        "patron_id": 8,
+        "book_id": 7,
+        "checkout_date": "2024-03-24",
+        "return_date": "2024-04-01",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 38,
+        "patron_id": 20,
+        "book_id": 12,
+        "checkout_date": "2024-06-06",
+        "return_date": "2024-06-15",
+        "fine_amount": 3.5
+      },
+      {
+        "checkout_id": 39,
+        "patron_id": 11,
+        "book_id": 14,
+        "checkout_date": "2024-02-03",
+        "return_date": "2024-02-26",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 40,
+        "patron_id": 12,
+        "book_id": 7,
+        "checkout_date": "2024-06-15",
+        "return_date": "2024-07-02",
+        "fine_amount": 4.0
+      },
+      {
+        "checkout_id": 41,
+        "patron_id": 8,
+        "book_id": 10,
+        "checkout_date": "2024-04-28",
+        "return_date": "2024-05-24",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 42,
+        "patron_id": 19,
+        "book_id": 2,
+        "checkout_date": "2024-04-12",
+        "return_date": "2024-05-09",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 43,
+        "patron_id": 2,
+        "book_id": 6,
+        "checkout_date": "2024-02-03",
+        "return_date": "2024-02-19",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 44,
+        "patron_id": 11,
+        "book_id": 11,
+        "checkout_date": "2024-03-12",
+        "return_date": "2024-03-18",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 45,
+        "patron_id": 8,
+        "book_id": 8,
+        "checkout_date": "2024-03-26",
+        "return_date": "2024-04-07",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 46,
+        "patron_id": 20,
+        "book_id": 8,
+        "checkout_date": "2024-06-09",
+        "return_date": "2024-06-12",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 47,
+        "patron_id": 8,
+        "book_id": 2,
+        "checkout_date": "2024-01-04",
+        "return_date": "2024-01-16",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 48,
+        "patron_id": 10,
+        "book_id": 12,
+        "checkout_date": "2024-05-16",
+        "return_date": "2024-05-23",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 49,
+        "patron_id": 18,
+        "book_id": 14,
+        "checkout_date": "2024-02-28",
+        "return_date": "2024-03-10",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 50,
+        "patron_id": 14,
+        "book_id": 7,
+        "checkout_date": "2024-04-07",
+        "return_date": "2024-04-12",
+        "fine_amount": 1.0
+      },
+      {
+        "checkout_id": 51,
+        "patron_id": 9,
+        "book_id": 12,
+        "checkout_date": "2024-02-22",
+        "return_date": "2024-03-11",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 52,
+        "patron_id": 11,
+        "book_id": 4,
+        "checkout_date": "2024-02-22",
+        "return_date": "2024-03-17",
+        "fine_amount": 3.0
+      },
+      {
+        "checkout_id": 53,
+        "patron_id": 9,
+        "book_id": 2,
+        "checkout_date": "2024-01-14",
+        "return_date": "2024-01-31",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 54,
+        "patron_id": 19,
+        "book_id": 14,
+        "checkout_date": "2024-04-29",
+        "return_date": "2024-05-23",
+        "fine_amount": 4.0
+      },
+      {
+        "checkout_id": 55,
+        "patron_id": 11,
+        "book_id": 3,
+        "checkout_date": "2024-02-27",
+        "return_date": "2024-03-02",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 56,
+        "patron_id": 19,
+        "book_id": 8,
+        "checkout_date": "2024-06-27",
+        "return_date": "2024-07-23",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 57,
+        "patron_id": 20,
+        "book_id": 2,
+        "checkout_date": "2024-04-27",
+        "return_date": "2024-05-15",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 58,
+        "patron_id": 16,
+        "book_id": 3,
+        "checkout_date": "2024-03-22",
+        "return_date": "2024-03-27",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 59,
+        "patron_id": 20,
+        "book_id": 11,
+        "checkout_date": "2024-02-15",
+        "return_date": "2024-02-29",
+        "fine_amount": 0.0
+      },
+      {
+        "checkout_id": 60,
+        "patron_id": 20,
+        "book_id": 2,
+        "checkout_date": "2024-03-01",
+        "return_date": "2024-03-13",
+        "fine_amount": 0.0
+      }
+    ]
+  },
+  "holds": {
+    "columns": [
+      "patron_id",
+      "book_id",
+      "hold_date",
+      "hold_count"
+    ],
+    "rows": [
+      {
+        "patron_id": 20,
+        "book_id": 8,
+        "hold_date": "2024-07-05",
+        "hold_count": 1
+      },
+      {
+        "patron_id": 8,
+        "book_id": 8,
+        "hold_date": "2024-07-04",
+        "hold_count": 1
+      },
+      {
+        "patron_id": 11,
+        "book_id": 9,
+        "hold_date": "2024-06-28",
+        "hold_count": 1
+      },
+      {
+        "patron_id": 2,
+        "book_id": 1,
+        "hold_date": "2024-06-14",
+        "hold_count": 1
+      },
+      {
+        "patron_id": 10,
+        "book_id": 2,
+        "hold_date": "2024-06-04",
+        "hold_count": 1
+      },
+      {
+        "patron_id": 8,
+        "book_id": 9,
+        "hold_date": "2024-06-19",
+        "hold_count": 1
+      },
+      {
+        "patron_id": 18,
+        "book_id": 4,
+        "hold_date": "2024-07-17",
+        "hold_count": 1
+      },
+      {
+        "patron_id": 4,
+        "book_id": 9,
+        "hold_date": "2024-06-11",
+        "hold_count": 1
+      },
+      {
+        "patron_id": 20,
+        "book_id": 9,
+        "hold_date": "2024-06-04",
+        "hold_count": 1
+      },
+      {
+        "patron_id": 8,
+        "book_id": 13,
+        "hold_date": "2024-07-05",
+        "hold_count": 1
+      },
+      {
+        "patron_id": 20,
+        "book_id": 12,
+        "hold_date": "2024-07-08",
+        "hold_count": 1
+      },
+      {
+        "patron_id": 16,
+        "book_id": 3,
+        "hold_date": "2024-06-28",
+        "hold_count": 1
+      },
+      {
+        "patron_id": 15,
+        "book_id": 12,
+        "hold_date": "2024-06-20",
+        "hold_count": 1
+      },
+      {
+        "patron_id": 14,
+        "book_id": 7,
+        "hold_date": "2024-06-29",
+        "hold_count": 1
+      },
+      {
+        "patron_id": 4,
+        "book_id": 8,
+        "hold_date": "2024-06-28",
+        "hold_count": 1
+      }
+    ]
+  },
+  "patron_book_report": {
+    "columns": [
+      "patron_id",
+      "patron_name",
+      "book_id",
+      "book_name",
+      "membership_fee",
+      "replacement_cost",
+      "fine_amount",
+      "hold_count",
+      "avg_fine_per_checkout",
+      "avg_fine_per_checkout_weight"
+    ],
+    "rows": [
+      {
+        "patron_id": 1,
+        "patron_name": "Alice",
+        "book_id": 2,
+        "book_name": "To Kill a Mockingbird",
+        "membership_fee": 30.0,
+        "replacement_cost": 21.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.33,
+        "avg_fine_per_checkout_weight": 0.5
+      },
+      {
+        "patron_id": 1,
+        "patron_name": "Alice",
+        "book_id": 14,
+        "book_name": "Neuromancer",
+        "membership_fee": 30.0,
+        "replacement_cost": 31.0,
+        "fine_amount": 1.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.33,
+        "avg_fine_per_checkout_weight": 0.5
+      },
+      {
+        "patron_id": 2,
+        "patron_name": "Bob",
+        "book_id": 1,
+        "book_name": "The Great Gatsby",
+        "membership_fee": 0.0,
+        "replacement_cost": 0.0,
+        "fine_amount": 0.0,
+        "hold_count": 1.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 2,
+        "patron_name": "Bob",
+        "book_id": 1,
+        "book_name": "The Great Gatsby",
+        "membership_fee": 7.5,
+        "replacement_cost": 13.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.38,
+        "avg_fine_per_checkout_weight": 0.25
+      },
+      {
+        "patron_id": 2,
+        "patron_name": "Bob",
+        "book_id": 6,
+        "book_name": "Brave New World",
+        "membership_fee": 7.5,
+        "replacement_cost": 29.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.38,
+        "avg_fine_per_checkout_weight": 0.25
+      },
+      {
+        "patron_id": 2,
+        "patron_name": "Bob",
+        "book_id": 8,
+        "book_name": "Animal Farm",
+        "membership_fee": 7.5,
+        "replacement_cost": 30.0,
+        "fine_amount": 4.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.38,
+        "avg_fine_per_checkout_weight": 0.25
+      },
+      {
+        "patron_id": 2,
+        "patron_name": "Bob",
+        "book_id": 13,
+        "book_name": "Dune",
+        "membership_fee": 7.5,
+        "replacement_cost": 30.0,
+        "fine_amount": 1.5,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.38,
+        "avg_fine_per_checkout_weight": 0.25
+      },
+      {
+        "patron_id": 3,
+        "patron_name": "Carol",
+        "book_id": 2,
+        "book_name": "To Kill a Mockingbird",
+        "membership_fee": 15.0,
+        "replacement_cost": 21.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.5
+      },
+      {
+        "patron_id": 3,
+        "patron_name": "Carol",
+        "book_id": 13,
+        "book_name": "Dune",
+        "membership_fee": 15.0,
+        "replacement_cost": 30.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.5
+      },
+      {
+        "patron_id": 4,
+        "patron_name": "Dan",
+        "book_id": 8,
+        "book_name": "Animal Farm",
+        "membership_fee": 30.0,
+        "replacement_cost": 30.0,
+        "fine_amount": 3.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 3.25,
+        "avg_fine_per_checkout_weight": 0.5
+      },
+      {
+        "patron_id": 4,
+        "patron_name": "Dan",
+        "book_id": 8,
+        "book_name": "Animal Farm",
+        "membership_fee": 0.0,
+        "replacement_cost": 0.0,
+        "fine_amount": 0.0,
+        "hold_count": 1.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 4,
+        "patron_name": "Dan",
+        "book_id": 9,
+        "book_name": "The Hobbit",
+        "membership_fee": 30.0,
+        "replacement_cost": 38.0,
+        "fine_amount": 3.5,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 3.25,
+        "avg_fine_per_checkout_weight": 0.5
+      },
+      {
+        "patron_id": 4,
+        "patron_name": "Dan",
+        "book_id": 9,
+        "book_name": "The Hobbit",
+        "membership_fee": 0.0,
+        "replacement_cost": 0.0,
+        "fine_amount": 0.0,
+        "hold_count": 1.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 5,
+        "patron_name": "Eve",
+        "book_id": 1,
+        "book_name": "The Great Gatsby",
+        "membership_fee": 80.0,
+        "replacement_cost": 13.0,
+        "fine_amount": 2.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 2.0,
+        "avg_fine_per_checkout_weight": 1.0
+      },
+      {
+        "patron_id": 6,
+        "patron_name": "Frank",
+        "book_id": 2,
+        "book_name": "To Kill a Mockingbird",
+        "membership_fee": 10.0,
+        "replacement_cost": 21.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.5
+      },
+      {
+        "patron_id": 6,
+        "patron_name": "Frank",
+        "book_id": 6,
+        "book_name": "Brave New World",
+        "membership_fee": 10.0,
+        "replacement_cost": 29.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.5
+      },
+      {
+        "patron_id": 7,
+        "patron_name": "Grace",
+        "book_id": 3,
+        "book_name": "1984",
+        "membership_fee": 100.0,
+        "replacement_cost": 13.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 1.0
+      },
+      {
+        "patron_id": 8,
+        "patron_name": "Hank",
+        "book_id": 2,
+        "book_name": "To Kill a Mockingbird",
+        "membership_fee": 6.666666666666667,
+        "replacement_cost": 21.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.5,
+        "avg_fine_per_checkout_weight": 0.16666666666666666
+      },
+      {
+        "patron_id": 8,
+        "patron_name": "Hank",
+        "book_id": 7,
+        "book_name": "Lord of the Flies",
+        "membership_fee": 6.666666666666667,
+        "replacement_cost": 19.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.5,
+        "avg_fine_per_checkout_weight": 0.16666666666666666
+      },
+      {
+        "patron_id": 8,
+        "patron_name": "Hank",
+        "book_id": 8,
+        "book_name": "Animal Farm",
+        "membership_fee": 6.666666666666667,
+        "replacement_cost": 30.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.5,
+        "avg_fine_per_checkout_weight": 0.16666666666666666
+      },
+      {
+        "patron_id": 8,
+        "patron_name": "Hank",
+        "book_id": 8,
+        "book_name": "Animal Farm",
+        "membership_fee": 0.0,
+        "replacement_cost": 0.0,
+        "fine_amount": 0.0,
+        "hold_count": 1.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 8,
+        "patron_name": "Hank",
+        "book_id": 9,
+        "book_name": "The Hobbit",
+        "membership_fee": 6.666666666666667,
+        "replacement_cost": 38.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.5,
+        "avg_fine_per_checkout_weight": 0.16666666666666666
+      },
+      {
+        "patron_id": 8,
+        "patron_name": "Hank",
+        "book_id": 9,
+        "book_name": "The Hobbit",
+        "membership_fee": 0.0,
+        "replacement_cost": 0.0,
+        "fine_amount": 0.0,
+        "hold_count": 1.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 8,
+        "patron_name": "Hank",
+        "book_id": 10,
+        "book_name": "Fahrenheit 451",
+        "membership_fee": 6.666666666666667,
+        "replacement_cost": 13.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.5,
+        "avg_fine_per_checkout_weight": 0.16666666666666666
+      },
+      {
+        "patron_id": 8,
+        "patron_name": "Hank",
+        "book_id": 13,
+        "book_name": "Dune",
+        "membership_fee": 6.666666666666667,
+        "replacement_cost": 30.0,
+        "fine_amount": 3.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.5,
+        "avg_fine_per_checkout_weight": 0.16666666666666666
+      },
+      {
+        "patron_id": 8,
+        "patron_name": "Hank",
+        "book_id": 13,
+        "book_name": "Dune",
+        "membership_fee": 0.0,
+        "replacement_cost": 0.0,
+        "fine_amount": 0.0,
+        "hold_count": 1.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 9,
+        "patron_name": "Iris",
+        "book_id": 2,
+        "book_name": "To Kill a Mockingbird",
+        "membership_fee": 40.0,
+        "replacement_cost": 21.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.5
+      },
+      {
+        "patron_id": 9,
+        "patron_name": "Iris",
+        "book_id": 12,
+        "book_name": "Wuthering Heights",
+        "membership_fee": 40.0,
+        "replacement_cost": 12.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.5
+      },
+      {
+        "patron_id": 10,
+        "patron_name": "Jack",
+        "book_id": 2,
+        "book_name": "To Kill a Mockingbird",
+        "membership_fee": 33.333333333333336,
+        "replacement_cost": 21.0,
+        "fine_amount": 3.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.75,
+        "avg_fine_per_checkout_weight": 0.3333333333333333
+      },
+      {
+        "patron_id": 10,
+        "patron_name": "Jack",
+        "book_id": 2,
+        "book_name": "To Kill a Mockingbird",
+        "membership_fee": 0.0,
+        "replacement_cost": 0.0,
+        "fine_amount": 0.0,
+        "hold_count": 1.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 10,
+        "patron_name": "Jack",
+        "book_id": 12,
+        "book_name": "Wuthering Heights",
+        "membership_fee": 33.333333333333336,
+        "replacement_cost": 12.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.75,
+        "avg_fine_per_checkout_weight": 0.3333333333333333
+      },
+      {
+        "patron_id": 10,
+        "patron_name": "Jack",
+        "book_id": 13,
+        "book_name": "Dune",
+        "membership_fee": 33.333333333333336,
+        "replacement_cost": 30.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.75,
+        "avg_fine_per_checkout_weight": 0.3333333333333333
+      },
+      {
+        "patron_id": 11,
+        "patron_name": "Kate",
+        "book_id": 3,
+        "book_name": "1984",
+        "membership_fee": 16.0,
+        "replacement_cost": 13.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.5,
+        "avg_fine_per_checkout_weight": 0.2
+      },
+      {
+        "patron_id": 11,
+        "patron_name": "Kate",
+        "book_id": 4,
+        "book_name": "Pride and Prejudice",
+        "membership_fee": 16.0,
+        "replacement_cost": 26.0,
+        "fine_amount": 3.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.5,
+        "avg_fine_per_checkout_weight": 0.2
+      },
+      {
+        "patron_id": 11,
+        "patron_name": "Kate",
+        "book_id": 9,
+        "book_name": "The Hobbit",
+        "membership_fee": 0.0,
+        "replacement_cost": 0.0,
+        "fine_amount": 0.0,
+        "hold_count": 1.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 11,
+        "patron_name": "Kate",
+        "book_id": 9,
+        "book_name": "The Hobbit",
+        "membership_fee": 16.0,
+        "replacement_cost": 38.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.5,
+        "avg_fine_per_checkout_weight": 0.2
+      },
+      {
+        "patron_id": 11,
+        "patron_name": "Kate",
+        "book_id": 11,
+        "book_name": "Jane Eyre",
+        "membership_fee": 16.0,
+        "replacement_cost": 11.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.5,
+        "avg_fine_per_checkout_weight": 0.2
+      },
+      {
+        "patron_id": 11,
+        "patron_name": "Kate",
+        "book_id": 14,
+        "book_name": "Neuromancer",
+        "membership_fee": 16.0,
+        "replacement_cost": 31.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.5,
+        "avg_fine_per_checkout_weight": 0.2
+      },
+      {
+        "patron_id": 12,
+        "patron_name": "Leo",
+        "book_id": 7,
+        "book_name": "Lord of the Flies",
+        "membership_fee": 100.0,
+        "replacement_cost": 19.0,
+        "fine_amount": 4.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 4.0,
+        "avg_fine_per_checkout_weight": 1.0
+      },
+      {
+        "patron_id": 13,
+        "patron_name": "Mia",
+        "book_id": 6,
+        "book_name": "Brave New World",
+        "membership_fee": 20.0,
+        "replacement_cost": 29.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.75,
+        "avg_fine_per_checkout_weight": 0.5
+      },
+      {
+        "patron_id": 13,
+        "patron_name": "Mia",
+        "book_id": 10,
+        "book_name": "Fahrenheit 451",
+        "membership_fee": 20.0,
+        "replacement_cost": 13.0,
+        "fine_amount": 3.5,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.75,
+        "avg_fine_per_checkout_weight": 0.5
+      },
+      {
+        "patron_id": 14,
+        "patron_name": "Nate",
+        "book_id": 7,
+        "book_name": "Lord of the Flies",
+        "membership_fee": 0.0,
+        "replacement_cost": 0.0,
+        "fine_amount": 0.0,
+        "hold_count": 1.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 14,
+        "patron_name": "Nate",
+        "book_id": 7,
+        "book_name": "Lord of the Flies",
+        "membership_fee": 80.0,
+        "replacement_cost": 19.0,
+        "fine_amount": 1.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.0,
+        "avg_fine_per_checkout_weight": 1.0
+      },
+      {
+        "patron_id": 15,
+        "patron_name": "Olive",
+        "book_id": 12,
+        "book_name": "Wuthering Heights",
+        "membership_fee": 30.0,
+        "replacement_cost": 12.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 1.0
+      },
+      {
+        "patron_id": 15,
+        "patron_name": "Olive",
+        "book_id": 12,
+        "book_name": "Wuthering Heights",
+        "membership_fee": 0.0,
+        "replacement_cost": 0.0,
+        "fine_amount": 0.0,
+        "hold_count": 1.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 16,
+        "patron_name": "Pat",
+        "book_id": 3,
+        "book_name": "1984",
+        "membership_fee": 10.0,
+        "replacement_cost": 13.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.67,
+        "avg_fine_per_checkout_weight": 0.3333333333333333
+      },
+      {
+        "patron_id": 16,
+        "patron_name": "Pat",
+        "book_id": 3,
+        "book_name": "1984",
+        "membership_fee": 0.0,
+        "replacement_cost": 0.0,
+        "fine_amount": 0.0,
+        "hold_count": 1.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 16,
+        "patron_name": "Pat",
+        "book_id": 5,
+        "book_name": "The Catcher in the Rye",
+        "membership_fee": 10.0,
+        "replacement_cost": 37.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.67,
+        "avg_fine_per_checkout_weight": 0.3333333333333333
+      },
+      {
+        "patron_id": 16,
+        "patron_name": "Pat",
+        "book_id": 15,
+        "book_name": "Foundation",
+        "membership_fee": 10.0,
+        "replacement_cost": 21.0,
+        "fine_amount": 5.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.67,
+        "avg_fine_per_checkout_weight": 0.3333333333333333
+      },
+      {
+        "patron_id": 17,
+        "patron_name": "Quinn",
+        "book_id": 12,
+        "book_name": "Wuthering Heights",
+        "membership_fee": 20.0,
+        "replacement_cost": 12.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.5,
+        "avg_fine_per_checkout_weight": 0.5
+      },
+      {
+        "patron_id": 17,
+        "patron_name": "Quinn",
+        "book_id": 14,
+        "book_name": "Neuromancer",
+        "membership_fee": 20.0,
+        "replacement_cost": 31.0,
+        "fine_amount": 3.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.5,
+        "avg_fine_per_checkout_weight": 0.5
+      },
+      {
+        "patron_id": 18,
+        "patron_name": "Rosa",
+        "book_id": 4,
+        "book_name": "Pride and Prejudice",
+        "membership_fee": 33.333333333333336,
+        "replacement_cost": 26.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.3333333333333333
+      },
+      {
+        "patron_id": 18,
+        "patron_name": "Rosa",
+        "book_id": 4,
+        "book_name": "Pride and Prejudice",
+        "membership_fee": 0.0,
+        "replacement_cost": 0.0,
+        "fine_amount": 0.0,
+        "hold_count": 1.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 18,
+        "patron_name": "Rosa",
+        "book_id": 9,
+        "book_name": "The Hobbit",
+        "membership_fee": 33.333333333333336,
+        "replacement_cost": 38.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.3333333333333333
+      },
+      {
+        "patron_id": 18,
+        "patron_name": "Rosa",
+        "book_id": 14,
+        "book_name": "Neuromancer",
+        "membership_fee": 33.333333333333336,
+        "replacement_cost": 31.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.3333333333333333
+      },
+      {
+        "patron_id": 19,
+        "patron_name": "Sam",
+        "book_id": 2,
+        "book_name": "To Kill a Mockingbird",
+        "membership_fee": 22.5,
+        "replacement_cost": 21.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.5,
+        "avg_fine_per_checkout_weight": 0.25
+      },
+      {
+        "patron_id": 19,
+        "patron_name": "Sam",
+        "book_id": 8,
+        "book_name": "Animal Farm",
+        "membership_fee": 22.5,
+        "replacement_cost": 30.0,
+        "fine_amount": 5.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.5,
+        "avg_fine_per_checkout_weight": 0.25
+      },
+      {
+        "patron_id": 19,
+        "patron_name": "Sam",
+        "book_id": 9,
+        "book_name": "The Hobbit",
+        "membership_fee": 22.5,
+        "replacement_cost": 38.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.5,
+        "avg_fine_per_checkout_weight": 0.25
+      },
+      {
+        "patron_id": 19,
+        "patron_name": "Sam",
+        "book_id": 14,
+        "book_name": "Neuromancer",
+        "membership_fee": 22.5,
+        "replacement_cost": 31.0,
+        "fine_amount": 4.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.5,
+        "avg_fine_per_checkout_weight": 0.25
+      },
+      {
+        "patron_id": 20,
+        "patron_name": "Tina",
+        "book_id": 2,
+        "book_name": "To Kill a Mockingbird",
+        "membership_fee": 15.0,
+        "replacement_cost": 21.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.44,
+        "avg_fine_per_checkout_weight": 0.16666666666666666
+      },
+      {
+        "patron_id": 20,
+        "patron_name": "Tina",
+        "book_id": 7,
+        "book_name": "Lord of the Flies",
+        "membership_fee": 15.0,
+        "replacement_cost": 19.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.44,
+        "avg_fine_per_checkout_weight": 0.16666666666666666
+      },
+      {
+        "patron_id": 20,
+        "patron_name": "Tina",
+        "book_id": 8,
+        "book_name": "Animal Farm",
+        "membership_fee": 0.0,
+        "replacement_cost": 0.0,
+        "fine_amount": 0.0,
+        "hold_count": 1.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 20,
+        "patron_name": "Tina",
+        "book_id": 8,
+        "book_name": "Animal Farm",
+        "membership_fee": 15.0,
+        "replacement_cost": 30.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.44,
+        "avg_fine_per_checkout_weight": 0.16666666666666666
+      },
+      {
+        "patron_id": 20,
+        "patron_name": "Tina",
+        "book_id": 9,
+        "book_name": "The Hobbit",
+        "membership_fee": 0.0,
+        "replacement_cost": 0.0,
+        "fine_amount": 0.0,
+        "hold_count": 1.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 20,
+        "patron_name": "Tina",
+        "book_id": 9,
+        "book_name": "The Hobbit",
+        "membership_fee": 15.0,
+        "replacement_cost": 38.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.44,
+        "avg_fine_per_checkout_weight": 0.16666666666666666
+      },
+      {
+        "patron_id": 20,
+        "patron_name": "Tina",
+        "book_id": 11,
+        "book_name": "Jane Eyre",
+        "membership_fee": 15.0,
+        "replacement_cost": 11.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.44,
+        "avg_fine_per_checkout_weight": 0.16666666666666666
+      },
+      {
+        "patron_id": 20,
+        "patron_name": "Tina",
+        "book_id": 12,
+        "book_name": "Wuthering Heights",
+        "membership_fee": 15.0,
+        "replacement_cost": 12.0,
+        "fine_amount": 3.5,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.44,
+        "avg_fine_per_checkout_weight": 0.16666666666666666
+      },
+      {
+        "patron_id": 20,
+        "patron_name": "Tina",
+        "book_id": 12,
+        "book_name": "Wuthering Heights",
+        "membership_fee": 0.0,
+        "replacement_cost": 0.0,
+        "fine_amount": 0.0,
+        "hold_count": 1.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": null,
+        "patron_name": "<Unallocated>",
+        "book_id": 1,
+        "book_name": "The Great Gatsby",
+        "membership_fee": 0.0,
+        "replacement_cost": -13.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": null,
+        "patron_name": "<Unallocated>",
+        "book_id": 2,
+        "book_name": "To Kill a Mockingbird",
+        "membership_fee": 0.0,
+        "replacement_cost": -147.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": null,
+        "patron_name": "<Unallocated>",
+        "book_id": 3,
+        "book_name": "1984",
+        "membership_fee": 0.0,
+        "replacement_cost": -26.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": null,
+        "patron_name": "<Unallocated>",
+        "book_id": 4,
+        "book_name": "Pride and Prejudice",
+        "membership_fee": 0.0,
+        "replacement_cost": -26.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": null,
+        "patron_name": "<Unallocated>",
+        "book_id": 5,
+        "book_name": "The Catcher in the Rye",
+        "membership_fee": 0.0,
+        "replacement_cost": 0.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": null,
+        "patron_name": "<Unallocated>",
+        "book_id": 6,
+        "book_name": "Brave New World",
+        "membership_fee": 0.0,
+        "replacement_cost": -58.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": null,
+        "patron_name": "<Unallocated>",
+        "book_id": 7,
+        "book_name": "Lord of the Flies",
+        "membership_fee": 0.0,
+        "replacement_cost": -57.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": null,
+        "patron_name": "<Unallocated>",
+        "book_id": 8,
+        "book_name": "Animal Farm",
+        "membership_fee": 0.0,
+        "replacement_cost": -120.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": null,
+        "patron_name": "<Unallocated>",
+        "book_id": 9,
+        "book_name": "The Hobbit",
+        "membership_fee": 0.0,
+        "replacement_cost": -190.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": null,
+        "patron_name": "<Unallocated>",
+        "book_id": 10,
+        "book_name": "Fahrenheit 451",
+        "membership_fee": 0.0,
+        "replacement_cost": -13.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": null,
+        "patron_name": "<Unallocated>",
+        "book_id": 11,
+        "book_name": "Jane Eyre",
+        "membership_fee": 0.0,
+        "replacement_cost": -11.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": null,
+        "patron_name": "<Unallocated>",
+        "book_id": 12,
+        "book_name": "Wuthering Heights",
+        "membership_fee": 0.0,
+        "replacement_cost": -48.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": null,
+        "patron_name": "<Unallocated>",
+        "book_id": 13,
+        "book_name": "Dune",
+        "membership_fee": 0.0,
+        "replacement_cost": -90.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": null,
+        "patron_name": "<Unallocated>",
+        "book_id": 14,
+        "book_name": "Neuromancer",
+        "membership_fee": 0.0,
+        "replacement_cost": -124.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": null,
+        "patron_name": "<Unallocated>",
+        "book_id": 15,
+        "book_name": "Foundation",
+        "membership_fee": 0.0,
+        "replacement_cost": 0.0,
+        "fine_amount": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      }
+    ]
+  },
+  "patron_author_report": {
+    "columns": [
+      "patron_id",
+      "patron_name",
+      "book_id",
+      "book_name",
+      "author_id",
+      "author_name",
+      "membership_fee",
+      "fine_amount",
+      "replacement_cost",
+      "hold_count",
+      "avg_fine_per_checkout",
+      "avg_fine_per_checkout_weight"
+    ],
+    "rows": [
+      {
+        "patron_id": 1,
+        "patron_name": "Alice",
+        "book_id": 2,
+        "book_name": "To Kill a Mockingbird",
+        "author_id": 2,
+        "author_name": "Lee",
+        "membership_fee": 30.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.33,
+        "avg_fine_per_checkout_weight": 0.5
+      },
+      {
+        "patron_id": 1,
+        "patron_name": "Alice",
+        "book_id": 2,
+        "book_name": "To Kill a Mockingbird",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 21.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 1,
+        "patron_name": "Alice",
+        "book_id": 14,
+        "book_name": "Neuromancer",
+        "author_id": 4,
+        "author_name": "Austen",
+        "membership_fee": 15.0,
+        "fine_amount": 0.5,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.33,
+        "avg_fine_per_checkout_weight": 0.5
+      },
+      {
+        "patron_id": 1,
+        "patron_name": "Alice",
+        "book_id": 14,
+        "book_name": "Neuromancer",
+        "author_id": 5,
+        "author_name": "Salinger",
+        "membership_fee": 15.0,
+        "fine_amount": 0.5,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.33,
+        "avg_fine_per_checkout_weight": 0.5
+      },
+      {
+        "patron_id": 1,
+        "patron_name": "Alice",
+        "book_id": 14,
+        "book_name": "Neuromancer",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 31.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 2,
+        "patron_name": "Bob",
+        "book_id": 1,
+        "book_name": "The Great Gatsby",
+        "author_id": 5,
+        "author_name": "Salinger",
+        "membership_fee": 3.75,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.38,
+        "avg_fine_per_checkout_weight": 0.25
+      },
+      {
+        "patron_id": 2,
+        "patron_name": "Bob",
+        "book_id": 1,
+        "book_name": "The Great Gatsby",
+        "author_id": 7,
+        "author_name": "Golding",
+        "membership_fee": 3.75,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.38,
+        "avg_fine_per_checkout_weight": 0.25
+      },
+      {
+        "patron_id": 2,
+        "patron_name": "Bob",
+        "book_id": 1,
+        "book_name": "The Great Gatsby",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 13.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 2,
+        "patron_name": "Bob",
+        "book_id": 6,
+        "book_name": "Brave New World",
+        "author_id": 8,
+        "author_name": "Tolkien",
+        "membership_fee": 7.5,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.38,
+        "avg_fine_per_checkout_weight": 0.25
+      },
+      {
+        "patron_id": 2,
+        "patron_name": "Bob",
+        "book_id": 6,
+        "book_name": "Brave New World",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 29.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 2,
+        "patron_name": "Bob",
+        "book_id": 8,
+        "book_name": "Animal Farm",
+        "author_id": 2,
+        "author_name": "Lee",
+        "membership_fee": 7.5,
+        "fine_amount": 4.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.38,
+        "avg_fine_per_checkout_weight": 0.25
+      },
+      {
+        "patron_id": 2,
+        "patron_name": "Bob",
+        "book_id": 8,
+        "book_name": "Animal Farm",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 30.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 2,
+        "patron_name": "Bob",
+        "book_id": 13,
+        "book_name": "Dune",
+        "author_id": 2,
+        "author_name": "Lee",
+        "membership_fee": 7.5,
+        "fine_amount": 1.5,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.38,
+        "avg_fine_per_checkout_weight": 0.25
+      },
+      {
+        "patron_id": 2,
+        "patron_name": "Bob",
+        "book_id": 13,
+        "book_name": "Dune",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 30.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 2,
+        "patron_name": "Bob",
+        "book_id": null,
+        "book_name": "<Unallocated>",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 1.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 3,
+        "patron_name": "Carol",
+        "book_id": 2,
+        "book_name": "To Kill a Mockingbird",
+        "author_id": 2,
+        "author_name": "Lee",
+        "membership_fee": 15.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.5
+      },
+      {
+        "patron_id": 3,
+        "patron_name": "Carol",
+        "book_id": 2,
+        "book_name": "To Kill a Mockingbird",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 21.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 3,
+        "patron_name": "Carol",
+        "book_id": 13,
+        "book_name": "Dune",
+        "author_id": 2,
+        "author_name": "Lee",
+        "membership_fee": 15.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.5
+      },
+      {
+        "patron_id": 3,
+        "patron_name": "Carol",
+        "book_id": 13,
+        "book_name": "Dune",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 30.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 4,
+        "patron_name": "Dan",
+        "book_id": 8,
+        "book_name": "Animal Farm",
+        "author_id": 2,
+        "author_name": "Lee",
+        "membership_fee": 30.0,
+        "fine_amount": 3.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 3.25,
+        "avg_fine_per_checkout_weight": 0.5
+      },
+      {
+        "patron_id": 4,
+        "patron_name": "Dan",
+        "book_id": 8,
+        "book_name": "Animal Farm",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 30.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 4,
+        "patron_name": "Dan",
+        "book_id": 9,
+        "book_name": "The Hobbit",
+        "author_id": 4,
+        "author_name": "Austen",
+        "membership_fee": 30.0,
+        "fine_amount": 3.5,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 3.25,
+        "avg_fine_per_checkout_weight": 0.5
+      },
+      {
+        "patron_id": 4,
+        "patron_name": "Dan",
+        "book_id": 9,
+        "book_name": "The Hobbit",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 38.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 4,
+        "patron_name": "Dan",
+        "book_id": null,
+        "book_name": "<Unallocated>",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 2.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 5,
+        "patron_name": "Eve",
+        "book_id": 1,
+        "book_name": "The Great Gatsby",
+        "author_id": 5,
+        "author_name": "Salinger",
+        "membership_fee": 40.0,
+        "fine_amount": 1.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 2.0,
+        "avg_fine_per_checkout_weight": 1.0
+      },
+      {
+        "patron_id": 5,
+        "patron_name": "Eve",
+        "book_id": 1,
+        "book_name": "The Great Gatsby",
+        "author_id": 7,
+        "author_name": "Golding",
+        "membership_fee": 40.0,
+        "fine_amount": 1.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 2.0,
+        "avg_fine_per_checkout_weight": 1.0
+      },
+      {
+        "patron_id": 5,
+        "patron_name": "Eve",
+        "book_id": 1,
+        "book_name": "The Great Gatsby",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 13.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 6,
+        "patron_name": "Frank",
+        "book_id": 2,
+        "book_name": "To Kill a Mockingbird",
+        "author_id": 2,
+        "author_name": "Lee",
+        "membership_fee": 10.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.5
+      },
+      {
+        "patron_id": 6,
+        "patron_name": "Frank",
+        "book_id": 2,
+        "book_name": "To Kill a Mockingbird",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 21.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 6,
+        "patron_name": "Frank",
+        "book_id": 6,
+        "book_name": "Brave New World",
+        "author_id": 8,
+        "author_name": "Tolkien",
+        "membership_fee": 10.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.5
+      },
+      {
+        "patron_id": 6,
+        "patron_name": "Frank",
+        "book_id": 6,
+        "book_name": "Brave New World",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 29.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 7,
+        "patron_name": "Grace",
+        "book_id": 3,
+        "book_name": "1984",
+        "author_id": 4,
+        "author_name": "Austen",
+        "membership_fee": 100.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 1.0
+      },
+      {
+        "patron_id": 7,
+        "patron_name": "Grace",
+        "book_id": 3,
+        "book_name": "1984",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 13.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 8,
+        "patron_name": "Hank",
+        "book_id": 2,
+        "book_name": "To Kill a Mockingbird",
+        "author_id": 2,
+        "author_name": "Lee",
+        "membership_fee": 6.666666666666667,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.5,
+        "avg_fine_per_checkout_weight": 0.16666666666666666
+      },
+      {
+        "patron_id": 8,
+        "patron_name": "Hank",
+        "book_id": 2,
+        "book_name": "To Kill a Mockingbird",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 21.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 8,
+        "patron_name": "Hank",
+        "book_id": 7,
+        "book_name": "Lord of the Flies",
+        "author_id": 5,
+        "author_name": "Salinger",
+        "membership_fee": 3.3333333333333335,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.5,
+        "avg_fine_per_checkout_weight": 0.16666666666666666
+      },
+      {
+        "patron_id": 8,
+        "patron_name": "Hank",
+        "book_id": 7,
+        "book_name": "Lord of the Flies",
+        "author_id": 8,
+        "author_name": "Tolkien",
+        "membership_fee": 3.3333333333333335,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.5,
+        "avg_fine_per_checkout_weight": 0.16666666666666666
+      },
+      {
+        "patron_id": 8,
+        "patron_name": "Hank",
+        "book_id": 7,
+        "book_name": "Lord of the Flies",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 19.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 8,
+        "patron_name": "Hank",
+        "book_id": 8,
+        "book_name": "Animal Farm",
+        "author_id": 2,
+        "author_name": "Lee",
+        "membership_fee": 6.666666666666667,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.5,
+        "avg_fine_per_checkout_weight": 0.16666666666666666
+      },
+      {
+        "patron_id": 8,
+        "patron_name": "Hank",
+        "book_id": 8,
+        "book_name": "Animal Farm",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 30.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 8,
+        "patron_name": "Hank",
+        "book_id": 9,
+        "book_name": "The Hobbit",
+        "author_id": 4,
+        "author_name": "Austen",
+        "membership_fee": 6.666666666666667,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.5,
+        "avg_fine_per_checkout_weight": 0.16666666666666666
+      },
+      {
+        "patron_id": 8,
+        "patron_name": "Hank",
+        "book_id": 9,
+        "book_name": "The Hobbit",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 38.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 8,
+        "patron_name": "Hank",
+        "book_id": 10,
+        "book_name": "Fahrenheit 451",
+        "author_id": 7,
+        "author_name": "Golding",
+        "membership_fee": 3.3333333333333335,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.5,
+        "avg_fine_per_checkout_weight": 0.16666666666666666
+      },
+      {
+        "patron_id": 8,
+        "patron_name": "Hank",
+        "book_id": 10,
+        "book_name": "Fahrenheit 451",
+        "author_id": 8,
+        "author_name": "Tolkien",
+        "membership_fee": 3.3333333333333335,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.5,
+        "avg_fine_per_checkout_weight": 0.16666666666666666
+      },
+      {
+        "patron_id": 8,
+        "patron_name": "Hank",
+        "book_id": 10,
+        "book_name": "Fahrenheit 451",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 13.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 8,
+        "patron_name": "Hank",
+        "book_id": 13,
+        "book_name": "Dune",
+        "author_id": 2,
+        "author_name": "Lee",
+        "membership_fee": 6.666666666666667,
+        "fine_amount": 3.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.5,
+        "avg_fine_per_checkout_weight": 0.16666666666666666
+      },
+      {
+        "patron_id": 8,
+        "patron_name": "Hank",
+        "book_id": 13,
+        "book_name": "Dune",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 30.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 8,
+        "patron_name": "Hank",
+        "book_id": null,
+        "book_name": "<Unallocated>",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 3.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 9,
+        "patron_name": "Iris",
+        "book_id": 2,
+        "book_name": "To Kill a Mockingbird",
+        "author_id": 2,
+        "author_name": "Lee",
+        "membership_fee": 40.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.5
+      },
+      {
+        "patron_id": 9,
+        "patron_name": "Iris",
+        "book_id": 2,
+        "book_name": "To Kill a Mockingbird",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 21.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 9,
+        "patron_name": "Iris",
+        "book_id": 12,
+        "book_name": "Wuthering Heights",
+        "author_id": 2,
+        "author_name": "Lee",
+        "membership_fee": 20.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.5
+      },
+      {
+        "patron_id": 9,
+        "patron_name": "Iris",
+        "book_id": 12,
+        "book_name": "Wuthering Heights",
+        "author_id": 5,
+        "author_name": "Salinger",
+        "membership_fee": 20.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.5
+      },
+      {
+        "patron_id": 9,
+        "patron_name": "Iris",
+        "book_id": 12,
+        "book_name": "Wuthering Heights",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 12.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 10,
+        "patron_name": "Jack",
+        "book_id": 2,
+        "book_name": "To Kill a Mockingbird",
+        "author_id": 2,
+        "author_name": "Lee",
+        "membership_fee": 33.333333333333336,
+        "fine_amount": 3.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.75,
+        "avg_fine_per_checkout_weight": 0.3333333333333333
+      },
+      {
+        "patron_id": 10,
+        "patron_name": "Jack",
+        "book_id": 2,
+        "book_name": "To Kill a Mockingbird",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 21.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 10,
+        "patron_name": "Jack",
+        "book_id": 12,
+        "book_name": "Wuthering Heights",
+        "author_id": 2,
+        "author_name": "Lee",
+        "membership_fee": 16.666666666666668,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.75,
+        "avg_fine_per_checkout_weight": 0.3333333333333333
+      },
+      {
+        "patron_id": 10,
+        "patron_name": "Jack",
+        "book_id": 12,
+        "book_name": "Wuthering Heights",
+        "author_id": 5,
+        "author_name": "Salinger",
+        "membership_fee": 16.666666666666668,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.75,
+        "avg_fine_per_checkout_weight": 0.3333333333333333
+      },
+      {
+        "patron_id": 10,
+        "patron_name": "Jack",
+        "book_id": 12,
+        "book_name": "Wuthering Heights",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 12.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 10,
+        "patron_name": "Jack",
+        "book_id": 13,
+        "book_name": "Dune",
+        "author_id": 2,
+        "author_name": "Lee",
+        "membership_fee": 33.333333333333336,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.75,
+        "avg_fine_per_checkout_weight": 0.3333333333333333
+      },
+      {
+        "patron_id": 10,
+        "patron_name": "Jack",
+        "book_id": 13,
+        "book_name": "Dune",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 30.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 10,
+        "patron_name": "Jack",
+        "book_id": null,
+        "book_name": "<Unallocated>",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 1.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 11,
+        "patron_name": "Kate",
+        "book_id": 3,
+        "book_name": "1984",
+        "author_id": 4,
+        "author_name": "Austen",
+        "membership_fee": 16.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.5,
+        "avg_fine_per_checkout_weight": 0.2
+      },
+      {
+        "patron_id": 11,
+        "patron_name": "Kate",
+        "book_id": 3,
+        "book_name": "1984",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 13.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 11,
+        "patron_name": "Kate",
+        "book_id": 4,
+        "book_name": "Pride and Prejudice",
+        "author_id": 4,
+        "author_name": "Austen",
+        "membership_fee": 5.333333333333333,
+        "fine_amount": 1.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.5,
+        "avg_fine_per_checkout_weight": 0.2
+      },
+      {
+        "patron_id": 11,
+        "patron_name": "Kate",
+        "book_id": 4,
+        "book_name": "Pride and Prejudice",
+        "author_id": 7,
+        "author_name": "Golding",
+        "membership_fee": 5.333333333333333,
+        "fine_amount": 1.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.5,
+        "avg_fine_per_checkout_weight": 0.2
+      },
+      {
+        "patron_id": 11,
+        "patron_name": "Kate",
+        "book_id": 4,
+        "book_name": "Pride and Prejudice",
+        "author_id": 8,
+        "author_name": "Tolkien",
+        "membership_fee": 5.333333333333333,
+        "fine_amount": 1.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.5,
+        "avg_fine_per_checkout_weight": 0.2
+      },
+      {
+        "patron_id": 11,
+        "patron_name": "Kate",
+        "book_id": 4,
+        "book_name": "Pride and Prejudice",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 26.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 11,
+        "patron_name": "Kate",
+        "book_id": 9,
+        "book_name": "The Hobbit",
+        "author_id": 4,
+        "author_name": "Austen",
+        "membership_fee": 16.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.5,
+        "avg_fine_per_checkout_weight": 0.2
+      },
+      {
+        "patron_id": 11,
+        "patron_name": "Kate",
+        "book_id": 9,
+        "book_name": "The Hobbit",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 38.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 11,
+        "patron_name": "Kate",
+        "book_id": 11,
+        "book_name": "Jane Eyre",
+        "author_id": 3,
+        "author_name": "Orwell",
+        "membership_fee": 5.333333333333333,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.5,
+        "avg_fine_per_checkout_weight": 0.2
+      },
+      {
+        "patron_id": 11,
+        "patron_name": "Kate",
+        "book_id": 11,
+        "book_name": "Jane Eyre",
+        "author_id": 6,
+        "author_name": "Huxley",
+        "membership_fee": 5.333333333333333,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.5,
+        "avg_fine_per_checkout_weight": 0.2
+      },
+      {
+        "patron_id": 11,
+        "patron_name": "Kate",
+        "book_id": 11,
+        "book_name": "Jane Eyre",
+        "author_id": 7,
+        "author_name": "Golding",
+        "membership_fee": 5.333333333333333,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.5,
+        "avg_fine_per_checkout_weight": 0.2
+      },
+      {
+        "patron_id": 11,
+        "patron_name": "Kate",
+        "book_id": 11,
+        "book_name": "Jane Eyre",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 11.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 11,
+        "patron_name": "Kate",
+        "book_id": 14,
+        "book_name": "Neuromancer",
+        "author_id": 4,
+        "author_name": "Austen",
+        "membership_fee": 8.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.5,
+        "avg_fine_per_checkout_weight": 0.2
+      },
+      {
+        "patron_id": 11,
+        "patron_name": "Kate",
+        "book_id": 14,
+        "book_name": "Neuromancer",
+        "author_id": 5,
+        "author_name": "Salinger",
+        "membership_fee": 8.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.5,
+        "avg_fine_per_checkout_weight": 0.2
+      },
+      {
+        "patron_id": 11,
+        "patron_name": "Kate",
+        "book_id": 14,
+        "book_name": "Neuromancer",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 31.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 11,
+        "patron_name": "Kate",
+        "book_id": null,
+        "book_name": "<Unallocated>",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 1.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 12,
+        "patron_name": "Leo",
+        "book_id": 7,
+        "book_name": "Lord of the Flies",
+        "author_id": 5,
+        "author_name": "Salinger",
+        "membership_fee": 50.0,
+        "fine_amount": 2.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 4.0,
+        "avg_fine_per_checkout_weight": 1.0
+      },
+      {
+        "patron_id": 12,
+        "patron_name": "Leo",
+        "book_id": 7,
+        "book_name": "Lord of the Flies",
+        "author_id": 8,
+        "author_name": "Tolkien",
+        "membership_fee": 50.0,
+        "fine_amount": 2.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 4.0,
+        "avg_fine_per_checkout_weight": 1.0
+      },
+      {
+        "patron_id": 12,
+        "patron_name": "Leo",
+        "book_id": 7,
+        "book_name": "Lord of the Flies",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 19.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 13,
+        "patron_name": "Mia",
+        "book_id": 6,
+        "book_name": "Brave New World",
+        "author_id": 8,
+        "author_name": "Tolkien",
+        "membership_fee": 20.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.75,
+        "avg_fine_per_checkout_weight": 0.5
+      },
+      {
+        "patron_id": 13,
+        "patron_name": "Mia",
+        "book_id": 6,
+        "book_name": "Brave New World",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 29.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 13,
+        "patron_name": "Mia",
+        "book_id": 10,
+        "book_name": "Fahrenheit 451",
+        "author_id": 7,
+        "author_name": "Golding",
+        "membership_fee": 10.0,
+        "fine_amount": 1.75,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.75,
+        "avg_fine_per_checkout_weight": 0.5
+      },
+      {
+        "patron_id": 13,
+        "patron_name": "Mia",
+        "book_id": 10,
+        "book_name": "Fahrenheit 451",
+        "author_id": 8,
+        "author_name": "Tolkien",
+        "membership_fee": 10.0,
+        "fine_amount": 1.75,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.75,
+        "avg_fine_per_checkout_weight": 0.5
+      },
+      {
+        "patron_id": 13,
+        "patron_name": "Mia",
+        "book_id": 10,
+        "book_name": "Fahrenheit 451",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 13.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 14,
+        "patron_name": "Nate",
+        "book_id": 7,
+        "book_name": "Lord of the Flies",
+        "author_id": 5,
+        "author_name": "Salinger",
+        "membership_fee": 40.0,
+        "fine_amount": 0.5,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.0,
+        "avg_fine_per_checkout_weight": 1.0
+      },
+      {
+        "patron_id": 14,
+        "patron_name": "Nate",
+        "book_id": 7,
+        "book_name": "Lord of the Flies",
+        "author_id": 8,
+        "author_name": "Tolkien",
+        "membership_fee": 40.0,
+        "fine_amount": 0.5,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.0,
+        "avg_fine_per_checkout_weight": 1.0
+      },
+      {
+        "patron_id": 14,
+        "patron_name": "Nate",
+        "book_id": 7,
+        "book_name": "Lord of the Flies",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 19.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 14,
+        "patron_name": "Nate",
+        "book_id": null,
+        "book_name": "<Unallocated>",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 1.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 15,
+        "patron_name": "Olive",
+        "book_id": 12,
+        "book_name": "Wuthering Heights",
+        "author_id": 2,
+        "author_name": "Lee",
+        "membership_fee": 15.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 1.0
+      },
+      {
+        "patron_id": 15,
+        "patron_name": "Olive",
+        "book_id": 12,
+        "book_name": "Wuthering Heights",
+        "author_id": 5,
+        "author_name": "Salinger",
+        "membership_fee": 15.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 1.0
+      },
+      {
+        "patron_id": 15,
+        "patron_name": "Olive",
+        "book_id": 12,
+        "book_name": "Wuthering Heights",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 12.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 15,
+        "patron_name": "Olive",
+        "book_id": null,
+        "book_name": "<Unallocated>",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 1.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 16,
+        "patron_name": "Pat",
+        "book_id": 3,
+        "book_name": "1984",
+        "author_id": 4,
+        "author_name": "Austen",
+        "membership_fee": 10.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.67,
+        "avg_fine_per_checkout_weight": 0.3333333333333333
+      },
+      {
+        "patron_id": 16,
+        "patron_name": "Pat",
+        "book_id": 3,
+        "book_name": "1984",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 13.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 16,
+        "patron_name": "Pat",
+        "book_id": 5,
+        "book_name": "The Catcher in the Rye",
+        "author_id": 4,
+        "author_name": "Austen",
+        "membership_fee": 10.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.67,
+        "avg_fine_per_checkout_weight": 0.3333333333333333
+      },
+      {
+        "patron_id": 16,
+        "patron_name": "Pat",
+        "book_id": 5,
+        "book_name": "The Catcher in the Rye",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 37.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 16,
+        "patron_name": "Pat",
+        "book_id": 15,
+        "book_name": "Foundation",
+        "author_id": 7,
+        "author_name": "Golding",
+        "membership_fee": 10.0,
+        "fine_amount": 5.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.67,
+        "avg_fine_per_checkout_weight": 0.3333333333333333
+      },
+      {
+        "patron_id": 16,
+        "patron_name": "Pat",
+        "book_id": 15,
+        "book_name": "Foundation",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 21.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 16,
+        "patron_name": "Pat",
+        "book_id": null,
+        "book_name": "<Unallocated>",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 1.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 17,
+        "patron_name": "Quinn",
+        "book_id": 12,
+        "book_name": "Wuthering Heights",
+        "author_id": 2,
+        "author_name": "Lee",
+        "membership_fee": 10.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.5,
+        "avg_fine_per_checkout_weight": 0.5
+      },
+      {
+        "patron_id": 17,
+        "patron_name": "Quinn",
+        "book_id": 12,
+        "book_name": "Wuthering Heights",
+        "author_id": 5,
+        "author_name": "Salinger",
+        "membership_fee": 10.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.5,
+        "avg_fine_per_checkout_weight": 0.5
+      },
+      {
+        "patron_id": 17,
+        "patron_name": "Quinn",
+        "book_id": 12,
+        "book_name": "Wuthering Heights",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 12.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 17,
+        "patron_name": "Quinn",
+        "book_id": 14,
+        "book_name": "Neuromancer",
+        "author_id": 4,
+        "author_name": "Austen",
+        "membership_fee": 10.0,
+        "fine_amount": 1.5,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.5,
+        "avg_fine_per_checkout_weight": 0.5
+      },
+      {
+        "patron_id": 17,
+        "patron_name": "Quinn",
+        "book_id": 14,
+        "book_name": "Neuromancer",
+        "author_id": 5,
+        "author_name": "Salinger",
+        "membership_fee": 10.0,
+        "fine_amount": 1.5,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.5,
+        "avg_fine_per_checkout_weight": 0.5
+      },
+      {
+        "patron_id": 17,
+        "patron_name": "Quinn",
+        "book_id": 14,
+        "book_name": "Neuromancer",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 31.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 18,
+        "patron_name": "Rosa",
+        "book_id": 4,
+        "book_name": "Pride and Prejudice",
+        "author_id": 4,
+        "author_name": "Austen",
+        "membership_fee": 11.111111111111112,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.3333333333333333
+      },
+      {
+        "patron_id": 18,
+        "patron_name": "Rosa",
+        "book_id": 4,
+        "book_name": "Pride and Prejudice",
+        "author_id": 7,
+        "author_name": "Golding",
+        "membership_fee": 11.111111111111112,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.3333333333333333
+      },
+      {
+        "patron_id": 18,
+        "patron_name": "Rosa",
+        "book_id": 4,
+        "book_name": "Pride and Prejudice",
+        "author_id": 8,
+        "author_name": "Tolkien",
+        "membership_fee": 11.111111111111112,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.3333333333333333
+      },
+      {
+        "patron_id": 18,
+        "patron_name": "Rosa",
+        "book_id": 4,
+        "book_name": "Pride and Prejudice",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 26.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 18,
+        "patron_name": "Rosa",
+        "book_id": 9,
+        "book_name": "The Hobbit",
+        "author_id": 4,
+        "author_name": "Austen",
+        "membership_fee": 33.333333333333336,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.3333333333333333
+      },
+      {
+        "patron_id": 18,
+        "patron_name": "Rosa",
+        "book_id": 9,
+        "book_name": "The Hobbit",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 38.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 18,
+        "patron_name": "Rosa",
+        "book_id": 14,
+        "book_name": "Neuromancer",
+        "author_id": 4,
+        "author_name": "Austen",
+        "membership_fee": 16.666666666666668,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.3333333333333333
+      },
+      {
+        "patron_id": 18,
+        "patron_name": "Rosa",
+        "book_id": 14,
+        "book_name": "Neuromancer",
+        "author_id": 5,
+        "author_name": "Salinger",
+        "membership_fee": 16.666666666666668,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.3333333333333333
+      },
+      {
+        "patron_id": 18,
+        "patron_name": "Rosa",
+        "book_id": 14,
+        "book_name": "Neuromancer",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 31.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 18,
+        "patron_name": "Rosa",
+        "book_id": null,
+        "book_name": "<Unallocated>",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 1.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 19,
+        "patron_name": "Sam",
+        "book_id": 2,
+        "book_name": "To Kill a Mockingbird",
+        "author_id": 2,
+        "author_name": "Lee",
+        "membership_fee": 22.5,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.5,
+        "avg_fine_per_checkout_weight": 0.25
+      },
+      {
+        "patron_id": 19,
+        "patron_name": "Sam",
+        "book_id": 2,
+        "book_name": "To Kill a Mockingbird",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 21.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 19,
+        "patron_name": "Sam",
+        "book_id": 8,
+        "book_name": "Animal Farm",
+        "author_id": 2,
+        "author_name": "Lee",
+        "membership_fee": 22.5,
+        "fine_amount": 5.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.5,
+        "avg_fine_per_checkout_weight": 0.25
+      },
+      {
+        "patron_id": 19,
+        "patron_name": "Sam",
+        "book_id": 8,
+        "book_name": "Animal Farm",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 30.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 19,
+        "patron_name": "Sam",
+        "book_id": 9,
+        "book_name": "The Hobbit",
+        "author_id": 4,
+        "author_name": "Austen",
+        "membership_fee": 22.5,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.5,
+        "avg_fine_per_checkout_weight": 0.25
+      },
+      {
+        "patron_id": 19,
+        "patron_name": "Sam",
+        "book_id": 9,
+        "book_name": "The Hobbit",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 38.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 19,
+        "patron_name": "Sam",
+        "book_id": 14,
+        "book_name": "Neuromancer",
+        "author_id": 4,
+        "author_name": "Austen",
+        "membership_fee": 11.25,
+        "fine_amount": 2.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.5,
+        "avg_fine_per_checkout_weight": 0.25
+      },
+      {
+        "patron_id": 19,
+        "patron_name": "Sam",
+        "book_id": 14,
+        "book_name": "Neuromancer",
+        "author_id": 5,
+        "author_name": "Salinger",
+        "membership_fee": 11.25,
+        "fine_amount": 2.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 1.5,
+        "avg_fine_per_checkout_weight": 0.25
+      },
+      {
+        "patron_id": 19,
+        "patron_name": "Sam",
+        "book_id": 14,
+        "book_name": "Neuromancer",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 31.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 20,
+        "patron_name": "Tina",
+        "book_id": 2,
+        "book_name": "To Kill a Mockingbird",
+        "author_id": 2,
+        "author_name": "Lee",
+        "membership_fee": 15.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.44,
+        "avg_fine_per_checkout_weight": 0.16666666666666666
+      },
+      {
+        "patron_id": 20,
+        "patron_name": "Tina",
+        "book_id": 2,
+        "book_name": "To Kill a Mockingbird",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 21.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 20,
+        "patron_name": "Tina",
+        "book_id": 7,
+        "book_name": "Lord of the Flies",
+        "author_id": 5,
+        "author_name": "Salinger",
+        "membership_fee": 7.5,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.44,
+        "avg_fine_per_checkout_weight": 0.16666666666666666
+      },
+      {
+        "patron_id": 20,
+        "patron_name": "Tina",
+        "book_id": 7,
+        "book_name": "Lord of the Flies",
+        "author_id": 8,
+        "author_name": "Tolkien",
+        "membership_fee": 7.5,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.44,
+        "avg_fine_per_checkout_weight": 0.16666666666666666
+      },
+      {
+        "patron_id": 20,
+        "patron_name": "Tina",
+        "book_id": 7,
+        "book_name": "Lord of the Flies",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 19.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 20,
+        "patron_name": "Tina",
+        "book_id": 8,
+        "book_name": "Animal Farm",
+        "author_id": 2,
+        "author_name": "Lee",
+        "membership_fee": 15.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.44,
+        "avg_fine_per_checkout_weight": 0.16666666666666666
+      },
+      {
+        "patron_id": 20,
+        "patron_name": "Tina",
+        "book_id": 8,
+        "book_name": "Animal Farm",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 30.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 20,
+        "patron_name": "Tina",
+        "book_id": 9,
+        "book_name": "The Hobbit",
+        "author_id": 4,
+        "author_name": "Austen",
+        "membership_fee": 15.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.44,
+        "avg_fine_per_checkout_weight": 0.16666666666666666
+      },
+      {
+        "patron_id": 20,
+        "patron_name": "Tina",
+        "book_id": 9,
+        "book_name": "The Hobbit",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 38.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 20,
+        "patron_name": "Tina",
+        "book_id": 11,
+        "book_name": "Jane Eyre",
+        "author_id": 3,
+        "author_name": "Orwell",
+        "membership_fee": 5.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.44,
+        "avg_fine_per_checkout_weight": 0.16666666666666666
+      },
+      {
+        "patron_id": 20,
+        "patron_name": "Tina",
+        "book_id": 11,
+        "book_name": "Jane Eyre",
+        "author_id": 6,
+        "author_name": "Huxley",
+        "membership_fee": 5.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.44,
+        "avg_fine_per_checkout_weight": 0.16666666666666666
+      },
+      {
+        "patron_id": 20,
+        "patron_name": "Tina",
+        "book_id": 11,
+        "book_name": "Jane Eyre",
+        "author_id": 7,
+        "author_name": "Golding",
+        "membership_fee": 5.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.44,
+        "avg_fine_per_checkout_weight": 0.16666666666666666
+      },
+      {
+        "patron_id": 20,
+        "patron_name": "Tina",
+        "book_id": 11,
+        "book_name": "Jane Eyre",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 11.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 20,
+        "patron_name": "Tina",
+        "book_id": 12,
+        "book_name": "Wuthering Heights",
+        "author_id": 2,
+        "author_name": "Lee",
+        "membership_fee": 7.5,
+        "fine_amount": 1.75,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.44,
+        "avg_fine_per_checkout_weight": 0.16666666666666666
+      },
+      {
+        "patron_id": 20,
+        "patron_name": "Tina",
+        "book_id": 12,
+        "book_name": "Wuthering Heights",
+        "author_id": 5,
+        "author_name": "Salinger",
+        "membership_fee": 7.5,
+        "fine_amount": 1.75,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.44,
+        "avg_fine_per_checkout_weight": 0.16666666666666666
+      },
+      {
+        "patron_id": 20,
+        "patron_name": "Tina",
+        "book_id": 12,
+        "book_name": "Wuthering Heights",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 12.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": 20,
+        "patron_name": "Tina",
+        "book_id": null,
+        "book_name": "<Unallocated>",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 3.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": null,
+        "patron_name": "<Unallocated>",
+        "book_id": 1,
+        "book_name": "The Great Gatsby",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": -13.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": null,
+        "patron_name": "<Unallocated>",
+        "book_id": 2,
+        "book_name": "To Kill a Mockingbird",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": -147.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": null,
+        "patron_name": "<Unallocated>",
+        "book_id": 3,
+        "book_name": "1984",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": -26.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": null,
+        "patron_name": "<Unallocated>",
+        "book_id": 4,
+        "book_name": "Pride and Prejudice",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": -26.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": null,
+        "patron_name": "<Unallocated>",
+        "book_id": 5,
+        "book_name": "The Catcher in the Rye",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": null,
+        "patron_name": "<Unallocated>",
+        "book_id": 6,
+        "book_name": "Brave New World",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": -58.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": null,
+        "patron_name": "<Unallocated>",
+        "book_id": 7,
+        "book_name": "Lord of the Flies",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": -57.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": null,
+        "patron_name": "<Unallocated>",
+        "book_id": 8,
+        "book_name": "Animal Farm",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": -120.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": null,
+        "patron_name": "<Unallocated>",
+        "book_id": 9,
+        "book_name": "The Hobbit",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": -190.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": null,
+        "patron_name": "<Unallocated>",
+        "book_id": 10,
+        "book_name": "Fahrenheit 451",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": -13.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": null,
+        "patron_name": "<Unallocated>",
+        "book_id": 11,
+        "book_name": "Jane Eyre",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": -11.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": null,
+        "patron_name": "<Unallocated>",
+        "book_id": 12,
+        "book_name": "Wuthering Heights",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": -48.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": null,
+        "patron_name": "<Unallocated>",
+        "book_id": 13,
+        "book_name": "Dune",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": -90.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": null,
+        "patron_name": "<Unallocated>",
+        "book_id": 14,
+        "book_name": "Neuromancer",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": -124.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      },
+      {
+        "patron_id": null,
+        "patron_name": "<Unallocated>",
+        "book_id": 15,
+        "book_name": "Foundation",
+        "author_id": null,
+        "author_name": "<Unallocated>",
+        "membership_fee": 0.0,
+        "fine_amount": 0.0,
+        "replacement_cost": 0.0,
+        "hold_count": 0.0,
+        "avg_fine_per_checkout": 0.0,
+        "avg_fine_per_checkout_weight": 0.0
+      }
+    ]
+  }
+};
+
+// ── TAB SWITCHING ────────────────────────────────────────────
+document.querySelectorAll('.step-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.step-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById(tab.dataset.panel).classList.add('active');
+  });
+});
+
+// ── HELPERS ──────────────────────────────────────────────────
+function fmt(v, col) {
+  if (v === null || v === undefined) return { text: 'NULL', cls: 'null' };
+  if (typeof v === 'number') {
+    if (col && (col.includes('cost') || col.includes('fee') || col.includes('fine') || col.includes('amount') || col.includes('paid'))) {
+      return { text: v.toFixed(2), cls: 'num' };
+    }
+    if (typeof v === 'number' && !Number.isInteger(v)) {
+      return { text: v.toFixed(4), cls: 'num' };
+    }
+    return { text: String(v), cls: 'num' };
+  }
+  return { text: String(v), cls: '' };
+}
+
+function makeTable(tbl, opts = {}) {
+  const { colClass, rowClass, maxRows, sortable } = opts;
+  const wrap = document.createElement('div');
+  wrap.className = 'table-wrap';
+  const table = document.createElement('table');
+
+  // Sort state: array of { col, dir } — first entry is primary
+  // Clicking a new column pushes it to front; clicking same column flips its dir
+  let sortKeys = [];
+
+  function sortedRows(rows) {
+    if (sortKeys.length === 0) return rows;
+    return [...rows].sort((a, b) => {
+      for (const { col, dir } of sortKeys) {
+        const av = a[col], bv = b[col];
+        // nulls always last
+        if (av === null && bv !== null) return 1;
+        if (av !== null && bv === null) return -1;
+        if (av === null && bv === null) continue;
+        let cmp = 0;
+        if (typeof av === 'number' && typeof bv === 'number') {
+          cmp = av - bv;
+        } else {
+          cmp = String(av).localeCompare(String(bv));
+        }
+        if (cmp !== 0) return dir === 'asc' ? cmp : -cmp;
+      }
+      return 0;
+    });
+  }
+
+  function renderBody(rows) {
+    tbody.innerHTML = '';
+    const sorted = sortedRows(rows);
+    const display = maxRows ? sorted.slice(0, maxRows) : sorted;
+    for (const row of display) {
+      const tr = document.createElement('tr');
+      if (rowClass) {
+        const cls = rowClass(row);
+        if (cls) tr.classList.add(cls);
+      }
+      for (const col of tbl.columns) {
+        const td = document.createElement('td');
+        const f = fmt(row[col], col);
+        td.textContent = f.text;
+        if (f.cls) td.classList.add(f.cls);
+        if (colClass && colClass[col]) td.classList.add(colClass[col]);
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+    if (maxRows && rows.length > maxRows) {
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      td.colSpan = tbl.columns.length;
+      td.textContent = `... ${rows.length - maxRows} more rows`;
+      td.className = 'null';
+      td.style.textAlign = 'center';
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+    }
+  }
+
+  function updateHeaders() {
+    for (const th of hrow.children) {
+      const col = th.dataset.col;
+      const idx = sortKeys.findIndex(k => k.col === col);
+      // Clear old indicators
+      const old = th.querySelector('.sort-ind');
+      if (old) old.remove();
+      if (idx >= 0) {
+        const ind = document.createElement('span');
+        ind.className = 'sort-ind';
+        const arrow = sortKeys[idx].dir === 'asc' ? '\u25B2' : '\u25BC';
+        const rank = sortKeys.length > 1 ? `${idx + 1}` : '';
+        ind.textContent = ` ${arrow}${rank}`;
+        th.appendChild(ind);
+      }
+    }
+  }
+
+  // Header
+  const thead = document.createElement('thead');
+  const hrow = document.createElement('tr');
+  for (const col of tbl.columns) {
+    const th = document.createElement('th');
+    th.textContent = col;
+    th.dataset.col = col;
+    if (colClass && colClass[col]) th.classList.add(colClass[col]);
+    if (sortable) {
+      th.classList.add('sortable');
+      th.addEventListener('click', () => {
+        const existing = sortKeys.findIndex(k => k.col === col);
+        if (existing === 0) {
+          // Already primary — flip direction
+          sortKeys[0].dir = sortKeys[0].dir === 'asc' ? 'desc' : 'asc';
+        } else {
+          // Remove from old position if present, push to front
+          if (existing > 0) sortKeys.splice(existing, 1);
+          sortKeys.unshift({ col, dir: 'asc' });
+          // Keep max 3 sort keys
+          if (sortKeys.length > 3) sortKeys.pop();
+        }
+        updateHeaders();
+        renderBody(tbl.rows);
+      });
+    }
+    hrow.appendChild(th);
+  }
+  thead.appendChild(hrow);
+  table.appendChild(thead);
+
+  // Body
+  const tbody = document.createElement('tbody');
+  renderBody(tbl.rows);
+  table.appendChild(tbody);
+
+  wrap.appendChild(table);
+  wrap.resetSort = () => { sortKeys = []; updateHeaders(); renderBody(tbl.rows); };
+  return wrap;
+}
+
+function card(title, rowCount, content) {
+  const div = document.createElement('div');
+  div.className = 'table-card';
+  div.innerHTML = `<div class="card-header"><span>${title}</span><span class="row-count">${rowCount} rows</span></div>`;
+  div.appendChild(content);
+  return div;
+}
+
+// ── PANEL 1: SOURCE TABLES ───────────────────────────────────
+(function renderSource() {
+  const panel = document.getElementById('source');
+
+  // Entities
+  const sec1 = document.createElement('div');
+  sec1.className = 'section';
+  sec1.innerHTML = '<h2>Entity Tables</h2><p class="desc">Each entity is a dimension in the BFT. Metrics live on their home entity.</p>';
+  const grid1 = document.createElement('div');
+  grid1.className = 'table-grid';
+
+  for (const [name, meta] of [['patrons', 'Patron entity — has membership_fee, avg_fine_per_checkout'], ['books', 'Book entity — has replacement_cost'], ['authors', 'Author entity — no metrics']]) {
+    const tbl = DATA[name];
+    grid1.appendChild(card(name, tbl.rows.length, makeTable(tbl)));
+  }
+  sec1.appendChild(grid1);
+  panel.appendChild(sec1);
+
+  // Relationships
+  const sec2 = document.createElement('div');
+  sec2.className = 'section';
+  sec2.innerHTML = '<h2>Relationship Tables</h2><p class="desc">Junctions connect entities. Some carry their own metrics (fine_amount on checkouts, hold_count on holds).</p>';
+  const grid2 = document.createElement('div');
+  grid2.className = 'table-grid';
+
+  grid2.appendChild(card('checkouts', DATA.checkouts.rows.length, makeTable(DATA.checkouts, { maxRows: 15 })));
+  grid2.appendChild(card('holds', DATA.holds.rows.length, makeTable(DATA.holds)));
+  grid2.appendChild(card('book_authors', DATA.book_authors.rows.length, makeTable(DATA.book_authors, { maxRows: 15 })));
+
+  sec2.appendChild(grid2);
+  panel.appendChild(sec2);
+
+  // Summary stats
+  const sec3 = document.createElement('div');
+  sec3.className = 'section';
+  sec3.innerHTML = '<h2>Source Totals</h2><p class="desc">These totals must be preserved in the BFT (the whole point of SUM-safety).</p>';
+
+  const totals = [
+    { label: 'SUM(membership_fee) from patrons', value: DATA.patrons.rows.reduce((s, r) => s + r.membership_fee, 0) },
+    { label: 'SUM(replacement_cost) from books', value: DATA.books.rows.reduce((s, r) => s + r.replacement_cost, 0) },
+    { label: 'SUM(fine_amount) from checkouts', value: DATA.checkouts.rows.reduce((s, r) => s + r.fine_amount, 0) },
+    { label: 'SUM(hold_count) from holds', value: DATA.holds.rows.reduce((s, r) => s + r.hold_count, 0) },
+  ];
+
+  const vgrid = document.createElement('div');
+  vgrid.className = 'verify-grid';
+  for (const t of totals) {
+    const vc = document.createElement('div');
+    vc.className = 'verify-card';
+    vc.innerHTML = `<div class="label">${t.label}</div><div class="values"><span style="font-size:16px;font-weight:600">${t.value.toFixed(2)}</span></div>`;
+    vgrid.appendChild(vc);
+  }
+  sec3.appendChild(vgrid);
+  panel.appendChild(sec3);
+})();
+
+// ── PANEL 2: RULES ───────────────────────────────────────────
+(function renderRules() {
+  const panel = document.getElementById('rules');
+
+  const intro = document.createElement('div');
+  intro.className = 'section';
+  intro.innerHTML = `<h2>How Metrics Propagate</h2>
+    <p class="desc">Each metric has a home entity. When we build a BFT that includes other entities, each metric needs a strategy for what its value means on foreign rows.</p>`;
+  panel.appendChild(intro);
+
+  // Full propagation rules — every hop, every metric, both tables
+  const rules = [
+    {
+      metric: 'membership_fee',
+      home: 'Patron',
+      type: 'currency (additive)',
+      path: [
+        { entity: 'Patron', label: 'home' },
+        { arrow: true, strategy: 'Allocation', cls: 'pill-alloc', weight: 'checkout_share' },
+        { entity: 'Book' },
+        { arrow: true, strategy: 'Allocation', cls: 'pill-alloc', weight: 'bookauthor_share' },
+        { entity: 'Author' },
+      ],
+      hops: [
+        { from: 'Patron', to: 'Book', via: 'Checkout', strategy: 'Allocation', pill: 'pill-alloc',
+          detail: 'Split equally across distinct books checked out. Alice ($60, 2 books) → $30 per book row. SUM across her books = $60.' },
+        { from: 'Book', to: 'Author', via: 'BookAuthor', strategy: 'Allocation', pill: 'pill-alloc',
+          detail: 'Then split again across each book\'s authors. If a book has 2 authors, each author gets half of that book\'s share. The 2-hop split means SUM across all Author rows still = $60 for Alice.' },
+      ],
+    },
+    {
+      metric: 'replacement_cost',
+      home: 'Book',
+      type: 'currency (additive)',
+      path: [
+        { entity: 'Book', label: 'home' },
+        { arrow: true, strategy: 'Elimination', cls: 'pill-elim' },
+        { entity: 'Patron' },
+        { arrow: true, strategy: 'Reserve', cls: 'pill-reserve' },
+        { entity: 'Author' },
+      ],
+      hops: [
+        { from: 'Book', to: 'Patron', via: 'Checkout', strategy: 'Elimination', pill: 'pill-elim',
+          detail: 'Full book cost appears on every patron row that checked it out (useful as context: "this patron had access to $X of books"). A correction row (patron_id=NULL) subtracts the overcounting so SUM stays correct.' },
+        { from: 'Patron', to: 'Author', via: 'BookAuthor', strategy: 'Reserve', pill: 'pill-reserve',
+          detail: 'At the Author grain, replacement_cost does NOT propagate further. It stays on dedicated reserve rows (author_id=NULL). The full value lives only on Book and Patron rows; Author rows get 0.' },
+      ],
+    },
+    {
+      metric: 'fine_amount',
+      home: 'Checkout junction (Patron x Book)',
+      type: 'currency (additive)',
+      path: [
+        { entity: 'Checkout', label: 'junction' },
+        { arrow: true, strategy: 'Pass-through', cls: 'pill-junction' },
+        { entity: 'Patron x Book' },
+        { arrow: true, strategy: 'Allocation', cls: 'pill-alloc', weight: 'bookauthor_share' },
+        { entity: 'Author' },
+      ],
+      hops: [
+        { from: 'Checkout', to: 'Patron x Book', via: '(natural grain)', strategy: 'Pass-through', pill: 'pill-junction',
+          detail: 'fine_amount lives on the Checkout junction. At Patron x Book grain it passes through directly — SUM of all fines for that patron-book pair.' },
+        { from: 'Patron x Book', to: 'Author', via: 'BookAuthor', strategy: 'Allocation', pill: 'pill-alloc',
+          detail: 'Then split across the book\'s authors. If a book has 3 authors, each Author row gets 1/3 of that patron-book fine total. SUM across authors = original fine.' },
+      ],
+    },
+    {
+      metric: 'hold_count',
+      home: 'Hold junction (Patron x Book)',
+      type: 'integer (additive)',
+      path: [
+        { entity: 'Hold', label: 'junction' },
+        { arrow: true, strategy: 'Reserve', cls: 'pill-reserve' },
+        { entity: 'BFT (dedicated rows)' },
+      ],
+      hops: [
+        { from: 'Hold', to: 'BFT', via: '(reserve rows)', strategy: 'Reserve', pill: 'pill-reserve',
+          detail: 'hold_count appears on dedicated reserve rows only. Base checkout rows have hold_count=0. In the Patron x Book report, reserve rows carry the patron_id and book_id. In the Patron x Author report, reserve rows carry only patron_id (book_id=NULL, author_id=NULL). SUM of reserve rows = source total (15).' },
+      ],
+    },
+    {
+      metric: 'avg_fine_per_checkout',
+      home: 'Patron',
+      type: 'float (non-additive)',
+      path: [
+        { entity: 'Patron', label: 'home' },
+        { arrow: true, strategy: 'Sum/Sum', cls: 'pill-sumsum', weight: 'weight col' },
+        { entity: 'Book' },
+        { arrow: true, strategy: 'Reserve', cls: 'pill-reserve' },
+        { entity: 'Author' },
+      ],
+      hops: [
+        { from: 'Patron', to: 'Book', via: 'Checkout', strategy: 'Sum/Sum', pill: 'pill-sumsum',
+          detail: 'A ratio — you cannot SUM averages. Each Book row carries the patron\'s avg and a weight column (1/checkout_count). To roll up: SUM(avg x weight) / SUM(weight). This gives each patron equal influence regardless of how many books they checked out.' },
+        { from: 'Book', to: 'Author', via: 'BookAuthor', strategy: 'Reserve', pill: 'pill-reserve',
+          detail: 'At the Author grain, avg_fine_per_checkout does not propagate. Author rows get 0 for this metric. The value only lives on Patron and Patron x Book rows.' },
+      ],
+    },
+  ];
+
+  const grid = document.createElement('div');
+  grid.className = 'rules-grid';
+
+  for (const r of rules) {
+    const rc = document.createElement('div');
+    rc.className = 'rule-card';
+
+    rc.innerHTML = `
+      <h3>${r.metric}</h3>
+      <div class="source">Home: <strong>${r.home}</strong> &middot; Type: ${r.type}</div>
+    `;
+
+    // Full path visualization
+    const pathDiv = document.createElement('div');
+    pathDiv.className = 'rule-path';
+    for (const p of r.path) {
+      if (p.arrow) {
+        const arrow = document.createElement('span');
+        arrow.className = 'arrow';
+        arrow.textContent = '→';
+        pathDiv.appendChild(arrow);
+        const lbl = document.createElement('span');
+        lbl.className = `strategy-label ${p.cls}`;
+        lbl.textContent = p.strategy + (p.weight ? ` (${p.weight})` : '');
+        pathDiv.appendChild(lbl);
+        const arrow2 = document.createElement('span');
+        arrow2.className = 'arrow';
+        arrow2.textContent = '→';
+        pathDiv.appendChild(arrow2);
+      } else {
+        const ent = document.createElement('span');
+        ent.className = 'entity';
+        ent.textContent = p.entity + (p.label ? ` (${p.label})` : '');
+        pathDiv.appendChild(ent);
+      }
+    }
+    rc.appendChild(pathDiv);
+
+    // Each hop as a separate detail block
+    for (const hop of r.hops) {
+      const hopDiv = document.createElement('div');
+      hopDiv.className = 'rule-detail';
+      hopDiv.innerHTML = `<span class="pill ${hop.pill}" style="margin-right:6px">${hop.strategy}</span>` +
+        `<strong>${hop.from} → ${hop.to}</strong> via ${hop.via}<br>` +
+        hop.detail;
+      rc.appendChild(hopDiv);
+    }
+
+    grid.appendChild(rc);
+  }
+  panel.appendChild(grid);
+
+  // Strategy matrix — one per BFT table, showing every cell
+  const matrices = [
+    {
+      title: 'Strategy Matrix — patron_book_report (Patron x Book)',
+      columns: ['metric', 'on Patron rows', 'on Book rows'],
+      rows: [
+        { metric: 'membership_fee', 'on Patron rows': 'HOME (full value)', 'on Book rows': 'Allocation (÷ checkout_share)' },
+        { metric: 'replacement_cost', 'on Patron rows': 'Elimination (full value + correction row)', 'on Book rows': 'HOME (full value)' },
+        { metric: 'fine_amount', 'on Patron rows': 'Junction pass-through', 'on Book rows': 'Junction pass-through' },
+        { metric: 'hold_count', 'on Patron rows': 'Reserve (dedicated rows)', 'on Book rows': 'Reserve (dedicated rows)' },
+        { metric: 'avg_fine_per_checkout', 'on Patron rows': 'HOME (full value)', 'on Book rows': 'Sum/Sum (use weight column)' },
+      ]
+    },
+    {
+      title: 'Strategy Matrix — patron_author_report (Patron x Book x Author)',
+      columns: ['metric', 'on Patron rows', 'on Book rows', 'on Author rows'],
+      rows: [
+        { metric: 'membership_fee', 'on Patron rows': 'HOME', 'on Book rows': 'Alloc (÷ checkout_share)', 'on Author rows': 'Alloc (÷ bookauthor_share)' },
+        { metric: 'replacement_cost', 'on Patron rows': 'Elimination (+correction)', 'on Book rows': 'HOME', 'on Author rows': 'Reserve (0, on reserve rows)' },
+        { metric: 'fine_amount', 'on Patron rows': 'Junction', 'on Book rows': 'Junction', 'on Author rows': 'Alloc (÷ bookauthor_share)' },
+        { metric: 'hold_count', 'on Patron rows': 'Reserve (dedicated rows)', 'on Book rows': 'Reserve', 'on Author rows': 'Reserve' },
+        { metric: 'avg_fine_per_checkout', 'on Patron rows': 'HOME', 'on Book rows': 'Sum/Sum (weight col)', 'on Author rows': 'Reserve (0)' },
+      ]
+    },
+  ];
+
+  for (const m of matrices) {
+    const sec = document.createElement('div');
+    sec.className = 'section';
+    sec.style.marginTop = '24px';
+    sec.innerHTML = `<h2>${m.title}</h2>
+      <p class="desc">What each metric does on each entity's rows. Every cell is the strategy for that metric at that dimension.</p>`;
+    sec.appendChild(makeTable({ columns: m.columns, rows: m.rows }));
+    panel.appendChild(sec);
+  }
+})();
+
+// ── PANEL 3: BFT ─────────────────────────────────────────────
+(function renderBft() {
+  const panel = document.getElementById('bft');
+
+  // Dimension definitions per table
+  const tableDims = {
+    patron_book_report: [
+      { key: 'patron', idCol: 'patron_id', labelCol: 'patron_name', label: 'Patron' },
+      { key: 'book',   idCol: 'book_id',   labelCol: 'book_name',   label: 'Book' },
+    ],
+    patron_author_report: [
+      { key: 'patron', idCol: 'patron_id', labelCol: 'patron_name', label: 'Patron' },
+      { key: 'book',   idCol: 'book_id',   labelCol: 'book_name',   label: 'Book' },
+      { key: 'author', idCol: 'author_id', labelCol: 'author_name', label: 'Author' },
+    ],
+  };
+
+  // Metrics that SUM normally vs sum/sum (weighted avg)
+  const sumSumMetrics = { avg_fine_per_checkout: 'avg_fine_per_checkout_weight' };
+  const regularMetrics = ['membership_fee', 'replacement_cost', 'fine_amount', 'hold_count'];
+
+  const metricColors = {
+    membership_fee: 'col-alloc',
+    replacement_cost: 'col-elim',
+    fine_amount: 'col-junction',
+    hold_count: 'col-reserve',
+    avg_fine_per_checkout: 'col-sumsum',
+  };
+
+  const sourceChecks = [
+    { col: 'membership_fee',    source: DATA.patrons.rows.reduce((s, r) => s + r.membership_fee, 0) },
+    { col: 'replacement_cost',  source: DATA.books.rows.reduce((s, r) => s + r.replacement_cost, 0) },
+    { col: 'fine_amount',       source: DATA.checkouts.rows.reduce((s, r) => s + r.fine_amount, 0) },
+    { col: 'hold_count',        source: DATA.holds.rows.reduce((s, r) => s + r.hold_count, 0) },
+  ];
+
+  // Legend
+  const legend = document.createElement('div');
+  legend.className = 'legend';
+  legend.innerHTML = `
+    <div class="legend-item"><div class="legend-swatch" style="background:var(--alloc)"></div> Allocation</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:var(--elim)"></div> Elimination</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:var(--reserve)"></div> Reserve</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:var(--sumsum)"></div> Sum/Sum</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:var(--junction)"></div> Junction</div>
+  `;
+  panel.appendChild(legend);
+
+  // Table picker
+  const pickerBar = document.createElement('div');
+  pickerBar.className = 'filter-bar';
+  const lbl1 = document.createElement('label');
+  lbl1.textContent = 'Table:';
+  pickerBar.appendChild(lbl1);
+
+  const bftSelect = document.createElement('select');
+  bftSelect.id = 'bft-select';
+  const opt1 = document.createElement('option');
+  opt1.value = 'patron_book_report';
+  opt1.textContent = 'patron_book_report (Patron x Book)';
+  bftSelect.appendChild(opt1);
+  const opt2 = document.createElement('option');
+  opt2.value = 'patron_author_report';
+  opt2.textContent = 'patron_author_report (Patron x Book x Author)';
+  bftSelect.appendChild(opt2);
+  pickerBar.appendChild(bftSelect);
+  panel.appendChild(pickerBar);
+
+  // Grain description
+  const grainDesc = document.createElement('div');
+  grainDesc.className = 'grain-desc';
+  panel.appendChild(grainDesc);
+
+  // Dimension toggles
+  const dimBar = document.createElement('div');
+  dimBar.className = 'metric-toggles';
+  panel.appendChild(dimBar);
+
+  // BFT table container
+  const bftContainer = document.createElement('div');
+  bftContainer.id = 'bft-table';
+  panel.appendChild(bftContainer);
+
+  // Verification
+  const verifySection = document.createElement('div');
+  verifySection.id = 'bft-verify';
+  verifySection.className = 'section';
+  verifySection.style.marginTop = '20px';
+  panel.appendChild(verifySection);
+
+  let activeDims = new Set();
+
+  function buildDimToggles() {
+    dimBar.innerHTML = '';
+    const dims = tableDims[bftSelect.value];
+    activeDims = new Set(dims.map(d => d.key));
+
+    for (const dim of dims) {
+      const btn = document.createElement('button');
+      btn.className = 'metric-toggle on';
+      btn.dataset.dim = dim.key;
+      btn.textContent = dim.label;
+      btn.addEventListener('click', () => {
+        if (activeDims.has(dim.key)) activeDims.delete(dim.key);
+        else activeDims.add(dim.key);
+        btn.classList.toggle('on');
+        render();
+      });
+      dimBar.appendChild(btn);
+    }
+  }
+
+  function aggregate(tbl, dims, selectedDims) {
+    const groupDimDefs = dims.filter(d => selectedDims.has(d.key));
+    const allRows = tbl.rows;
+
+    // If all dims selected, no aggregation needed
+    if (groupDimDefs.length === dims.length) {
+      // Build columns: dim cols + metric cols (skip weight col)
+      const cols = [];
+      for (const d of dims) { cols.push(d.idCol, d.labelCol); }
+      const metricCols = tbl.columns.filter(c => metricColors[c]);
+      cols.push(...metricCols);
+      return { columns: cols, rows: allRows };
+    }
+
+    // Group by selected dimensions
+    const groups = new Map();
+    for (const row of allRows) {
+      const keyParts = groupDimDefs.map(d => row[d.idCol]);
+      const key = keyParts.join('|');
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(row);
+    }
+
+    // Aggregate
+    const cols = [];
+    for (const d of groupDimDefs) { cols.push(d.idCol, d.labelCol); }
+    const metricCols = tbl.columns.filter(c => metricColors[c]);
+    cols.push(...metricCols);
+
+    const aggRows = [];
+    for (const [, groupRows] of groups) {
+      const out = {};
+      for (const d of groupDimDefs) {
+        out[d.idCol] = groupRows[0][d.idCol];
+        out[d.labelCol] = groupRows[0][d.labelCol];
+      }
+      for (const col of metricCols) {
+        if (sumSumMetrics[col]) {
+          // Weighted average: SUM(val * weight) / SUM(weight)
+          const weightCol = sumSumMetrics[col];
+          let sumVW = 0, sumW = 0;
+          for (const r of groupRows) {
+            const w = Number(r[weightCol]) || 0;
+            sumVW += (Number(r[col]) || 0) * w;
+            sumW += w;
+          }
+          out[col] = sumW > 0 ? sumVW / sumW : 0;
+        } else {
+          out[col] = groupRows.reduce((s, r) => s + (Number(r[col]) || 0), 0);
+        }
+      }
+      aggRows.push(out);
+    }
+
+    return { columns: cols, rows: aggRows };
+  }
+
+  function render() {
+    const tableName = bftSelect.value;
+    const tbl = DATA[tableName];
+    const dims = tableDims[tableName];
+    const selectedDims = activeDims;
+
+    // Grain description
+    const dimNames = dims.filter(d => selectedDims.has(d.key)).map(d => d.label);
+    const grainLabel = dimNames.length === 0
+      ? 'Grand Total (no dimensions — just SUM everything)'
+      : dimNames.join(' x ');
+    grainDesc.innerHTML = `<div style="margin-bottom:12px; font-size:13px;">
+      Grain: <strong>${grainLabel}</strong>
+      <span style="color:var(--text-dim); margin-left:8px;">
+        ${dimNames.length < dims.length
+          ? '— aggregated by SUM (and weighted avg for Sum/Sum metrics)'
+          : '— full detail, every row from the BFT'}
+      </span>
+    </div>`;
+
+    const agg = aggregate(tbl, dims, selectedDims);
+
+    const colClass = {};
+    for (const [col, cls] of Object.entries(metricColors)) colClass[col] = cls;
+
+    bftContainer.innerHTML = '';
+    const tableEl = makeTable(agg, { colClass, sortable: true });
+    const cardEl = card(`${grainLabel}`, agg.rows.length, tableEl);
+    // Add reset sort button to card header
+    const resetBtn = document.createElement('button');
+    resetBtn.className = 'sort-reset';
+    resetBtn.textContent = 'Reset sort';
+    resetBtn.addEventListener('click', () => tableEl.resetSort());
+    cardEl.querySelector('.card-header').appendChild(resetBtn);
+    bftContainer.appendChild(cardEl);
+
+    // Verification — SUM of additive metrics should match source at every grain
+    const metricCols = tbl.columns.filter(c => metricColors[c]);
+    verifySection.innerHTML = '<h2>SUM Verification</h2><p class="desc">Additive metrics must SUM to the source total at every grain level. That\'s what makes a BFT SUM-safe.</p>';
+    const vg = document.createElement('div');
+    vg.className = 'verify-grid';
+
+    for (const chk of sourceChecks) {
+      if (!metricCols.includes(chk.col)) continue;
+      const bftSum = agg.rows.reduce((s, r) => s + (Number(r[chk.col]) || 0), 0);
+      const match = Math.abs(bftSum - chk.source) < 0.01;
+      const vc = document.createElement('div');
+      vc.className = 'verify-card';
+      vc.innerHTML = `
+        <div class="label">SUM(${chk.col})</div>
+        <div class="values">
+          <span>Source: <strong>${chk.source.toFixed(2)}</strong></span>
+          <span>BFT: <strong>${bftSum.toFixed(2)}</strong></span>
+          <span class="${match ? 'match' : 'mismatch'}">${match ? 'PASS' : 'FAIL'}</span>
+        </div>`;
+      vg.appendChild(vc);
+    }
+    verifySection.appendChild(vg);
+
+    // Sum/Sum note
+    if (metricCols.includes('avg_fine_per_checkout')) {
+      const note = document.createElement('div');
+      note.className = 'rule-detail';
+      note.style.marginTop = '12px';
+      const allRows = agg.rows;
+      const weightCol = 'avg_fine_per_checkout_weight';
+      let sumVW = 0, sumW = 0;
+      for (const r of tbl.rows) {
+        const w = r[weightCol] || 0;
+        sumVW += (r.avg_fine_per_checkout || 0) * w;
+        sumW += w;
+      }
+      const weightedAvg = sumW > 0 ? sumVW / sumW : 0;
+      note.innerHTML = `<strong>avg_fine_per_checkout</strong> is a Sum/Sum metric — do not SUM it directly. ` +
+        `Weighted average across all rows: SUM(value x weight) / SUM(weight) = <strong>${weightedAvg.toFixed(4)}</strong>`;
+      verifySection.appendChild(note);
+    }
+  }
+
+  bftSelect.addEventListener('change', () => {
+    buildDimToggles();
+    render();
+  });
+  buildDimToggles();
+  render();
+})();
+</script>
+</body>
+</html>
