@@ -10,3 +10,10 @@ data/northwind/*
 claude_next.sh
 claude_output.txt
 .claude/task-log
+
+# Local scratch: databases, wizard drafts, and downloaded datasets
+*.duckdb
+*.duckdb.wal
+*.bft-draft.json
+/test-data/
+/university-manifest.yaml
