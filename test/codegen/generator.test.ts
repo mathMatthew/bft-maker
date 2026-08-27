@@ -1,11 +1,13 @@
 import { describe, it } from "node:test";
 import * as assert from "node:assert/strict";
 import { execSync } from "node:child_process";
-import { writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { writeFileSync, mkdirSync, rmSync, existsSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { loadManifest } from "../../src/manifest/yaml.js";
 import { generate } from "../../src/codegen/generator.js";
 import { defaultSourceMapping, planTable } from "../../src/codegen/planner.js";
+import { emitFiles } from "../../src/codegen/emit.js";
 
 describe("planner", () => {
   const manifest = loadManifest("data/university/manifest.yaml");
@@ -155,6 +157,30 @@ describe("generator", () => {
     const output = generate(manifest, { dataDir: "data/university" });
     assert.ok(output.runScript.includes("#!/bin/bash"));
     assert.ok(output.runScript.includes("duckdb"));
+  });
+
+  it("generates a database-backed runner without CSV loading", () => {
+    const output = generate(manifest, { source: "database" });
+
+    assert.equal(output.loadDataSQL, "");
+    assert.ok(!output.runScript.includes("00_load_data.sql"));
+    assert.ok(output.runScript.includes('DB_PATH=${1:?"Usage: run.sh <database_path>"}'));
+    assert.ok(output.runScript.includes("duckdb.connect(db_path)"));
+    assert.ok(output.runScript.includes("Materialized {table_name}: {row_count} rows"));
+  });
+
+  it("does not emit a loader file for database-backed sources", () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "bft-maker-db-source-"));
+    try {
+      const output = generate(manifest, { source: "database" });
+      const written = emitFiles(output, outputDir);
+
+      assert.equal(existsSync(join(outputDir, "00_load_data.sql")), false);
+      assert.equal(written.length, output.tables.length + 1);
+      assert.ok(written.includes(join(outputDir, "run.sh")));
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
   });
 });
 

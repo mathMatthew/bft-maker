@@ -9,10 +9,13 @@ export function emitFiles(output: GeneratedOutput, outputDir: string): string[] 
   mkdirSync(outputDir, { recursive: true });
   const written: string[] = [];
 
-  // 00_load_data.sql
-  const loadPath = join(outputDir, "00_load_data.sql");
-  writeFileSync(loadPath, output.loadDataSQL);
-  written.push(loadPath);
+  // Database-backed sources already contain their source tables and use an
+  // empty loadDataSQL marker, so there is no loader file to emit.
+  if (output.loadDataSQL.trim().length > 0) {
+    const loadPath = join(outputDir, "00_load_data.sql");
+    writeFileSync(loadPath, output.loadDataSQL);
+    written.push(loadPath);
+  }
 
   // Per-table SQL files
   for (let i = 0; i < output.tables.length; i++) {
